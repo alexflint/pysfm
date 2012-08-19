@@ -43,4 +43,7 @@ def prdot(H, X):
 def dots(*m):
     return reduce(np.dot, m)
 
+# Compute the sum of squared elements
+def ssq(x):
+    return np.dot(x,x)
 

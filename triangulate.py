@@ -2,8 +2,8 @@ import numpy as np
 from algebra import *
 
 # Triangulate a 3D point from a set of observations by cameras with
-# fixed parameters
-def triangulate(K, Rs, ts, msms):
+# fixed parameters. Uses least squares on the algebraic error.
+def algebraic_lsq(K, Rs, ts, msms):
     A = np.empty((len(Rs)*2, 3))
     b = np.empty(len(Rs)*2)
     msms = np.asarray(msms)

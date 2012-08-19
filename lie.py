@@ -16,7 +16,7 @@ G3 = np.array([[ 0., 0., 0. ],
 
 Gs = [ G1, G2, G3 ]
 
-class SO3:
+class SO3(object):
     @classmethod
     def exp(cls, m):
         m = np.asarray(m)
@@ -41,11 +41,11 @@ class SO3:
 
 
 
-
+################################################################################
 def f(m, x):
     return np.dot(SO3.exp(m), x)
 
-def test():
+def run_tests():
     x0 = np.array([1., 4., -2.])
     m0 = np.zeros(3)
     

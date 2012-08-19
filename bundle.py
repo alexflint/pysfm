@@ -1,6 +1,6 @@
 from algebra import *
 import lie
-import robustifier
+import sensor_model
 import optimize
 
 ############################################################################
@@ -57,9 +57,7 @@ class Bundle:
         self.pts = [ np.zeros(3) ] * npts
         self.msm = np.zeros((ncameras, npts, 2))
         self.msm_mask = np.ones((ncameras, npts), bool)
-
-        self.robustifier = None   # robust cost function, maps 2x1 -> 2x1
-        self.Jrobustifier = None  # Jacobian of above     maps 2x1 -> 2x2
+        self.sensor_model = sensor_model.GaussianModel(1.)
 
     def check_consistency(self):
         assert np.shape(self.Rs) == (self.ncameras, 3, 3), \
@@ -94,7 +92,7 @@ class Bundle:
 
     # Get the component of the residual for the measurement of point j in camera i
     def residual(self, i, j):
-        return self.robustifier(self.reproj_error(i, j))
+        return self.sensor_model.residual_from_error(self.reproj_error(i, j))
 
     # Get the complete residual vector
     def residuals(self):
@@ -106,7 +104,7 @@ class Bundle:
         R = self.Rs[i]
         t = self.ts[i]
         x = self.pts[j];
-        Jcost_r = self.Jrobustifier(self.reproj_error(i, j))
+        Jcost_r = self.sensor_model.Jresidual_from_error(self.reproj_error(i, j))
         Jr_cam = dots(Jcost_r, Jproject_cam(self.K, R, t, x))
         Jr_x = dots(Jcost_r, Jproject_x(self.K, R, t, x))
         return Jr_cam, Jr_x
@@ -140,8 +138,8 @@ class Bundle:
         b2.pts = [ pt.copy() for pt in self.pts ]
         b2.msm = self.msm.copy()
         b2.msm_mask = self.msm_mask.copy()
-        b2.robustifier = self.robustifier
-        b2.Jrobustifier = self.Jrobustifier
+        b2.sensor_model = self.sensor_model
+        b2.outlier_mask = self.outlier_mask.copy()
         return b2
 
     def apply_update(self, delta, param_mask=None):
@@ -241,8 +239,8 @@ class BundleAdjuster:
         # Compute various components
         for i,j in zip(*np.nonzero(self.b.msm_mask)):
             err_ij = self.b.reproj_error(i, j)
-            r = self.b.robustifier(err_ij)
-            Jcost_r = self.b.Jrobustifier(err_ij)
+            r = self.b.sensor_model.residual_from_error(err_ij)
+            Jcost_r = self.b.sensor_model.Jresidual_from_error(err_ij)
             Jr_cam = Jproject_cam(self.b.K, self.b.Rs[i], self.b.ts[i], self.b.pts[j])
             Jr_pt = Jproject_x(self.b.K, self.b.Rs[i], self.b.ts[i], self.b.pts[j])
             Jc = dots(Jcost_r, Jr_cam)

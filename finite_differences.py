@@ -1,17 +1,6 @@
-import sys
 import numpy as np
 
-def spy(A, t=1e-8):
-    A = np.asarray(A)
-    assert A.ndim == 2
-    for row in A:
-        sys.stdout.write('[')
-        for x in row:
-            if abs(x) > t:
-                sys.stdout.write('x')
-            else:
-                sys.stdout.write(' ')
-        sys.stdout.write(']\n')
+import numpy_test
 
 def axis(i, ndim):
     x = np.zeros(ndim)
@@ -63,11 +52,11 @@ def check_jacobian(f, Jf, x0):
             print Jf_abserr
         else:
             print 'Numeric Jacobian (sparsity pattern):'
-            spy(Jf_numeric)
+            numpy_test.spy(Jf_numeric)
             print 'Analytic Jacobian (sparsity pattern):'
-            spy(Jf)
+            numpy_test.spy(Jf)
             print 'Residual of Jacobian (sparsity pattern):'
-            spy(Jf_abserr, 1e-6)
+            numpy_test.spy(Jf_abserr, 1e-6)
 
         print 'Max error in Jacobian:'
         print abserr
