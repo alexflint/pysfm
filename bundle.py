@@ -42,16 +42,72 @@ def Jproject_cam(K, R, t, x):
                       Jproject_t(K, R, t, x)))
 
 ############################################################################
+# Represents a pinhole camera with a rotation and translation
+class Camera(object):
+    def __init__(self, R=None, t=None, idx=None):
+        if R is None:
+            R = np.eye(3)
+        if t is None:
+            t = np.zeros(3)
+        assert np.shape(R) == (3,3)
+        assert np.shape(t) == (3,)
+        self.idx = idx
+        self.R = np.asarray(R)
+        self.t = np.asarray(t)
+        assert self.R
+        
+    def projection_matrix(self):
+        return np.hstack((self.R, self.t[:,np.newaxis]))
+
+    def clone(self):
+        return Camera(self.R, self.t, self.idx)
+
+    def update
+    
+############################################################################
+# Represents a set of measurements associated with a single 3D point
+class Track(object):
+    def __init__(self, camera_ids=[], measurements=[], reconstruction=None):
+        assert isinstance(camera_ids, list)
+        assert isinstance(measuremets_ids, list)
+        assert len(camera_ids) == len(measurements)
+        if reconstruction is None:
+            reconstruction = np.zeros(3)
+        self.measurements = dict(zip(camera_ids, measurements))
+        self.reconstruction = reconstruction
+
+    # Add a measurement to this track for the camera with the given ID
+    def add_measurement(self, camera_id, measurement):
+        assert np.shape(measurement) == (2,)
+        assert type(camera_id) is int
+        self.measurements[ camera_id ] = measurement
+
+    def has_measurement(self, camera_id):
+        return camera_id in self.measurements
+
+    def camera_ids(self):
+        return self.measurements.viewkeys()
+
+    def clone(self):
+        clone = Track(self.measurements.viewvalues(),
+                      self.measurements.viewvalues(),
+                      self.reconstruction)
+        return clone
+
+############################################################################
 # Represents a set of cameras and points
-class Bundle:
+class Bundle(object):
     NumCamParams = 6
     NumPointParams = 3
 
-    def __init__(self, ncameras, npts):
+    def __init__(self):
+        self.cameras = []
+        self.tracks = []
+        self.K = np.eye(3)
+
+
         self.ncameras = ncameras
         self.npts = npts
-        self.nparams = ncameras * Bundle.NumCamParams + npts * Bundle.NumPointParams
-        self.K = np.eye(3)
         self.Rs = [ np.eye(3) ] * ncameras
         self.ts = [ np.zeros(3) ] * ncameras
         self.pts = [ np.zeros(3) ] * npts
@@ -59,60 +115,74 @@ class Bundle:
         self.msm_mask = np.ones((ncameras, npts), bool)
         self.sensor_model = sensor_model.GaussianModel(1.)
 
+    # Check sizes etc
     def check_consistency(self):
-        assert np.shape(self.Rs) == (self.ncameras, 3, 3), \
-            'shape was '+str(np.shape(self.Rs))
-        assert np.shape(self.ts) == (self.ncameras, 3), \
-            'shape was '+str(np.shape(self.ts))
-        assert np.shape(self.pts) == (self.npts, 3), \
-            'shape was '+str(np.shape(self.pts))
-        assert np.shape(self.msm) == (self.ncameras, self.npts, 2), \
-            'shape was '+str(np.shape(self.msm))
         assert np.shape(self.K) == (3, 3), \
             'shape was '+str(np.shape(self.K))
 
+    # Get a list of rotation matrices for all cameras
+    def Rs():
+        return np.array([ cam.R for cam in cameras ])
+
+    # Get a list of translation vectors for all cameras
+    def ts():
+        return np.array([ cam.t for cam in cameras ])
+
+    # Get the measurement of the j-th track in the i-th camera
+    def measurement(self, i, j):
+        return self.tracks[j].get_measurement(i)
+
+    # Get (camer_id, track_id) pairs for all measurements
+    def measurement_ids(self, i, j):
+        return ( (i,j) for j in range(len(tracks)) for i in trakcs[j].camera_ids() )
+
+    # Get the number of free parameters in the entire system
+    def num_params():
+        return len(self.cameras) * Bundle.NumCamParams + len(self.tracks) * Bundle.NumPointParams
+
+    # Get the prediction for the j-th track in the i-th camera
     def predict(self, i, j):
         assert self.msm_mask[i,j]
-        return project(self.K, self.Rs[i], self.ts[i], self.pts[j])
-
-    # Get an array containing predictions for each (camera, point) pair
-    def predictions(self):
-        return np.array([ self.predict(i,j) 
-                          for (i,j) in zip(*np.nonzero(self.msm_mask)) ])
+        return project(self.K, self.cameras[i].R, self.cameras[i].t, self.tracks[j].reconstruction)
 
     # Get the element-wise difference between a measurement and its prediction
     def reproj_error(self, i, j):
-        assert self.msm_mask[i,j], 'Requested camera %d / point %d' % (i,j)
-        return self.predict(i,j) - self.msm[i,j]
-
-    # Get an array containing predictions for each (camera, point) pair
-    def reproj_errors(self):
-        return np.array([ self.reproj_error(i,j) 
-                          for (i,j) in zip(*np.nonzero(self.msm_mask)) ])
+        return self.predict(i,j) - self.measurement(i,j)
 
     # Get the component of the residual for the measurement of point j in camera i
     def residual(self, i, j):
         return self.sensor_model.residual_from_error(self.reproj_error(i, j))
 
-    # Get the complete residual vector
-    def residuals(self):
-        return np.array([ self.residual(i,j) 
-                          for (i,j) in zip(*np.nonzero(self.msm_mask)) ]).flatten()
-
-    # Get the jacobian of the residuals
+    # Get the jacobian of the residual for camera i, track j
     def Jresidual(self, i, j):
-        R = self.Rs[i]
-        t = self.ts[i]
-        x = self.pts[j];
+        R = self.cameras[i].R
+        t = self.cameras[i].t
+        x = self.tracks[j].reconstruction
         Jcost_r = self.sensor_model.Jresidual_from_error(self.reproj_error(i, j))
         Jr_cam = dots(Jcost_r, Jproject_cam(self.K, R, t, x))
         Jr_x = dots(Jcost_r, Jproject_x(self.K, R, t, x))
         return Jr_cam, Jr_x
 
-    # Get the jacobian of the residuals
+    # Get an array containing predictions for each (camera, point) pair
+    def predictions(self):
+        return np.array([ self.predict(i,j)
+                          for (i,j) in self.measurement_ids() ])
+
+    # Get an array containing predictions for each (camera, point) pair
+    def reproj_errors(self):
+        return np.array([ self.reproj_error(i,j) 
+                          for (i,j) in self.measurement_ids() ])
+
+    # Get the complete residual vector. It is a vector of length NUM_MEASUREMENTS*2
+    # where NUM_MEASUREMENTS is the sum of the track lengths
+    def residuals(self):
+        return np.array([ self.residual(i,j)
+                          for (i,j) in self.measurement_ids() ])
+
+    # Get the Jacobian of the complete residual vector
     def Jresiduals(self):
-        nmeasurements = np.sum(self.msm_mask)
-        J = np.zeros((nmeasurements*2, self.nparams))
+        msm_ids = list(self.measurement_ids)
+        J = np.zeros((len(msm_ids)*2, self.num_params()))
         for msm_idx,(i,j) in enumerate(zip(*np.nonzero(self.msm_mask))):
             # Compute jacobians
             Jr_cam, Jr_x = self.Jresidual(i,j)
@@ -123,25 +193,23 @@ class Bundle:
             ptcol = self.ncameras * Bundle.NumCamParams + j * Bundle.NumPointParams
             J[ row:row+2, camcol:camcol+Bundle.NumCamParams  ] = Jr_cam
             J[ row:row+2,  ptcol:ptcol+Bundle.NumPointParams ] = Jr_x
+
         return J
 
-    # Get the total cost of the current system
+    # Get the total cost of the system
     def cost(self):
         return np.sum(np.square(self.residuals()))
 
     # Clone this object
-    def copy(self):
-        b2 = Bundle(self.ncameras, self.npts)
-        b2.K = self.K.copy()
-        b2.Rs = [ R.copy() for R in self.Rs ]
-        b2.ts = [ t.copy() for t in self.ts ]
-        b2.pts = [ pt.copy() for pt in self.pts ]
-        b2.msm = self.msm.copy()
-        b2.msm_mask = self.msm_mask.copy()
-        b2.sensor_model = self.sensor_model
-        b2.outlier_mask = self.outlier_mask.copy()
-        return b2
+    def clone(self):
+        clone = Bundle()
+        clone.K = self.K.copy()
+        clone.tracks = [ t.clone() for t in self.tracks ]
+        clone.cameras = [ cam.clone for cam in self.cameras ]
+        clone.sensor_model = self.sensor_model
+        return clone
 
+    # Apply a linear update to all cameras and points
     def apply_update(self, delta, param_mask=None):
         delta = np.asarray(delta)
 
@@ -156,19 +224,20 @@ class Bundle:
 
         assert delta.shape == (self.nparams,), 'shape was '+str(np.shape(delta))
 
-        for i in range(self.ncameras):
-            v = delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ]
-            self.Rs[i] = np.dot(self.Rs[i], lie.SO3.exp(v[:3]))
-            self.ts[i] += v[3:]
+        for i,cam in enumerate(self.cameras):
+            cam.update( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
 
         offs = self.ncameras*Bundle.NumCamParams
-        for i in range(self.npts):
-            self.pts[i] += delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ]
+        for i,track in enumerate(self.tracks):
+            track.update( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
 
+    # Clone this object and apply a linear update to the clone
     def copy_and_update(self, delta, param_mask=None):
-        b = self.copy()
-        b.apply_update(delta, param_mask)
-        return b
+        clone = self.clone()
+        clone.apply_update(delta, param_mask)
+        return clone
+
+
 
 ############################################################################
 class BundleAdjuster:
