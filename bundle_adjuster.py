@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from algebra import *
 import optimize
 from bundle import Bundle
@@ -15,12 +17,57 @@ class BundleAdjuster:
         self.bCs = np.empty((nc, 6))            # top part of J.T * r     (i.e. RHS of normal eqns)
         self.bPs = np.empty((nt, 3))          # bottom part of J.T * r  (i.e. RHS of normal eqns)
 
+        self.num_steps = 0
+        self.converged = False
+        self.costs = []
+
+    def optimize(self, param_mask, max_steps=25, init_damping=100.):
+        # Begin optimizing
+        damping = init_damping
+        self.num_steps = 0
+        self.converged = False
+        self.costs = [ self.bundle.cost() ]
+        while not self.converged and self.num_steps < max_steps:
+            self.num_steps += 1
+            cur_cost = self.bundle.cost()
+            print 'Step %d: cost=%f, damping=%f' % (self.num_steps, cur_cost, damping)
+
+            while not self.converged:
+                # Compute update
+                try:
+                    delta = self.compute_update(damping, param_mask)
+                except np.linalg.LinAlgError:
+                    # Matrix was singular: increase damping
+                    damping *= 10.
+                    self.converged = damping > 1e+8
+                    continue
+
+                # Apply update
+                bnext = deepcopy(self.bundle).perturb(delta, param_mask)
+                next_cost = bnext.cost()
+
+                # Decide whether to accept it
+                if next_cost < cur_cost:
+                    damping *= .1
+                    self.bundle = bnext
+                    self.costs.append(next_cost)
+                    self.converged = abs(cur_cost - next_cost) < 1e-8
+                    break
+                else:
+                    damping *= 10.
+                    self.converged = damping > 1e+8
+
+        if self.converged:
+            print 'Converged after %d steps' % self.num_steps
+        else:
+            print 'Failed to converge after %d steps' % self.num_steps
+
+
     # Solve the normal equations using the schur complement.
     # Return (update-for-cameras), (update-for-points)
-    def compute_update(self, bundle, damping, param_mask=None):
-        self.set_bundle(bundle)
-        nc = len(bundle.cameras)
-        nt = len(bundle.tracks)
+    def compute_update(self, damping, param_mask=None):
+        nc = len(self.bundle.cameras)
+        nt = len(self.bundle.tracks)
 
         # The way we do parameter elimination here is in fact
         # mathematically equivalent to eliminating the parameters from

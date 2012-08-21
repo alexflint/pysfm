@@ -161,9 +161,11 @@ class Bundle(object):
             # Check camera ids
             for i,idx in enumerate(track.camera_ids()):
                 if idx < 0 or idx >= len(self.cameras):
-                    raise Error('Invalid camera ID in new track: %d '+ \
-                                '(at track.camera_ids[%d])' % \
-                                    (idx, i))
+                    print idx
+                    print i
+                    fmt = 'Invalid camera ID=%d in new track at camera_ids[%d])'
+                    raise Exception(fmt % (int(idx), i))
+
         self.tracks.append(track)
         return track
 

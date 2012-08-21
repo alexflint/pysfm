@@ -7,7 +7,7 @@ import bundle
 import sensor_model
 import optimize
 from algebra import *
-import bundle_adjuster
+from bundle_adjuster import BundleAdjuster
 import draw_bundle
 
 ############################################################################
@@ -173,46 +173,9 @@ def test_optimize_raw_lm():
 def test_optimize_fast():
     print '***\nOPTIMIZING WITH FAST SCHUR\n***'
     b_true, b_init, param_mask = create_test_problem()
-    MAX_STEPS = 25
 
-    # Begin optimizing
-    bcur = deepcopy(b_init)
-    num_steps = 0
-    damping = 100.
-    converged = False
-    costs = [ bcur.cost() ]
-    while not converged and num_steps < MAX_STEPS:
-        num_steps += 1
-        cur_cost = bcur.cost()
-        print 'Step %d: cost=%f, damping=%f' % (num_steps, cur_cost, damping)
-
-        while not converged:
-            ba = bundle_adjuster.BundleAdjuster(bcur)
-            try:
-                delta = ba.compute_update(bcur, damping, param_mask)
-            except np.linalg.LinAlgError:
-                # Matrix was singular: increase damping
-                damping *= 10.
-                converged = damping > 1e+8
-                continue
-
-            bnext = deepcopy(bcur).perturb(delta, param_mask) ##
-            next_cost = bnext.cost()
-
-            if next_cost < cur_cost:
-                bcur = bnext
-                damping *= .1
-                costs.append(next_cost)
-                converged = abs(cur_cost - next_cost) < 1e-8
-                break
-            else:
-                damping *= 10.
-                converged = damping > 1e+8
-
-    if converged:
-        print 'Converged after %d steps' % num_steps
-    else:
-        print 'Failed to converge after %d steps' % num_steps
+    ba = BundleAdjuster(b_init)
+    ba.optimize(param_mask, max_steps=25)
 
     #report_bundle(b_init, 'Initial')
     #report_bundle(bcur, 'Estimated')
@@ -230,11 +193,11 @@ def test_optimize_fast():
     #    print dots(Rtrue, Rinit.T)
 
     print '\nCost (initial -> estimated -> true)'
-    print '  %f -> %f -> %f' % (b_init.cost(), bcur.cost(), b_true.cost())
+    print '  %f -> %f -> %f' % (b_init.cost(), ba.bundle.cost(), b_true.cost())
 
     draw_bundle.output_views(b_init, 'out/init.pdf')
     draw_bundle.output_views(b_true, 'out/true.pdf')
-    draw_bundle.output_views(bcur, 'out/estimated.pdf')
+    draw_bundle.output_views(ba.bundle, 'out/estimated.pdf')
 
 ############################################################################
 if __name__ == '__main__':
