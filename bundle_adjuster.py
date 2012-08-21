@@ -29,9 +29,9 @@ class BundleAdjuster:
             param_mask = np.ones(self.bundle.num_params()).astype(bool)
         else:
             assert param_mask.dtype == bool
-            assert np.shape(param_mask) == (self.b.nparams,) , \
+            assert np.shape(param_mask) == (self.bundle.num_params(),) , \
                 'shape was %s by there are %d parameters' % \
-                (str(np.shape(param_mask)), self.b.nparams)
+                (str(np.shape(param_mask)), self.bundle.num_params())
 
         # Get parameter masks for camera / point parameters
         cam_param_mask = param_mask[:nc*6 ]

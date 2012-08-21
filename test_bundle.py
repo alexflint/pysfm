@@ -1,19 +1,14 @@
 import sys
 import numpy as np
 from numpy import *
+from copy import deepcopy
 
 import bundle
 import sensor_model
 import optimize
-import lie
 from algebra import *
-import finite_differences
-import schur
-import triangulate
-
-import numpy_test
-from numpy_test import NumpyTestCase
-import unittest
+import bundle_adjuster
+import draw_bundle
 
 ############################################################################
 def rotation_xy(th):
@@ -28,7 +23,7 @@ def rotation_xz(th):
 
 def create_test_bundle(noise=.1):
     NUM_CAMERAS        = 4
-    NUM_POINTS         = 5
+    NUM_POINTS         = 50
     POINT_CLOUD_RADIUS = 5.
     MISSING_FRAC       = .1     # fraction of measurements that are missing
     OUTLIER_FRAC       = 0      # fraction of measurements that are outliers
@@ -84,24 +79,25 @@ def create_test_bundle(noise=.1):
     b.outlier_mask = outlier_mask
     return b
 
-def create_test_problem(noise=.01, initial_pert=.05):
+############################################################################
+def create_test_problem(noise=.05, initial_pert=.1):
     # Create the ground truth bundle
     b_true = create_test_bundle(noise)
 
     # Set up the parameter mask
-    param_mask = np.array([ i>=6 for i in range(b_true.nparams) ])
+    param_mask = np.array([ i>=6 for i in range(b_true.num_params()) ])
     param_mask[9] = False
 
     # Pick a starting point
     np.random.seed(1888)
-    pert = np.zeros(b_true.nparams)
+    pert = np.zeros(b_true.num_params())
     pert[param_mask] = np.random.randn(np.sum(param_mask)) * initial_pert
-    b_init = b_true.copy_and_update(pert)
+    b_init = deepcopy(b_true).perturb(pert)
 
     # Replace the initial 3D point estimates with their triangulations
     # given the initial camera parameters
-    for j in range(b_init.npts):
-        b_init.pts[j] = triangulate.algebraic_lsq(b_init.K, b_init.Rs, b_init.ts, b_init.msm[:,j])
+    for track in b_init.tracks:
+        track.reconstruction = b_init.triangulate(track)
 
     return b_true, b_init, param_mask
 
@@ -122,52 +118,15 @@ def report_bundle(bundle, name):
 
 
 ############################################################################
-# Optimize bundle parameters
-def test_optimize():
-    b = create_test_bundle()
-    bundle_f = lambda x: replace_bundle_params(b, x).residuals()
-    bundle_Jf = lambda x: replace_bundle_params(b, x).Jresiduals()
-
-    # pick a starting point some distance from true params
-    x0 = all_params(b)
-    np.random.seed(1)
-    x0[4:] += np.random.randn(len(x0)-4) * 1e-1
-
-    opt = optimize.LevenbergMarquardtOptimizer(bundle_f, bundle_Jf);
-    opt.param_mask = np.array([ i>3 for i in range(len(x0)) ])
-    opt.optimize(x0)
-
-    print 'True ts:'
-    print b.ts
-    print 'True Rs:'
-    print b.Rs
-    print 'True points:'
-    print b.pts
-    print 'Measurements:'
-    print b.msm
-    print 'Predictions:'
-    print b.predictions()
-
-    est = replace_bundle_params(b, opt.xcur)
-    print 'Estimated ts:'
-    print est.ts
-    print 'Estimated Rs:'
-    print est.Rs
-    print 'Estimated points:'
-    print est.pts
-    print 'Predictions:'
-    print est.predictions()
-
-############################################################################
-# This version uses a more efficient way of applying updates etc
-def test_optimize2():
-    MAX_STEPS = 10
+# This version uses explicit LM updates
+def test_optimize_raw_lm():
+    MAX_STEPS = 25
 
     print '***\nOPTIMIZING WITH RAW LEVENBERG-MARQUARDT\n***'
     b_true, b_init, param_mask = create_test_problem()
 
     # Begin optimizing
-    bcur = b_init.copy()
+    bcur = deepcopy(b_init)
     costs = [ bcur.cost() ]
     lm = optimize.LevenbergMarquardt()
     while not lm.converged and lm.num_steps < MAX_STEPS:
@@ -176,7 +135,7 @@ def test_optimize2():
         Jcur = bcur.Jresiduals()[:,param_mask]
         while not lm.converged:
             delta = lm.next_update(rcur, Jcur)
-            bnext = bcur.copy_and_update(delta, param_mask)
+            bnext = deepcopy(bcur).perturb(delta, param_mask)
             rnext = bnext.residuals()
             if np.dot(rnext,rnext) < np.dot(rcur,rcur):
                 lm.accept_update(rnext)
@@ -211,16 +170,13 @@ def test_optimize2():
 
 ############################################################################
 # This version uses the schur complement
-def test_optimize3():
+def test_optimize_fast():
     print '***\nOPTIMIZING WITH FAST SCHUR\n***'
     b_true, b_init, param_mask = create_test_problem()
-    MAX_STEPS = 20
-
-    print 'Outliers:'
-    numpy_test.spy(b_true.outlier_mask)
+    MAX_STEPS = 25
 
     # Begin optimizing
-    bcur = b_init.copy()
+    bcur = deepcopy(b_init)
     num_steps = 0
     damping = 100.
     converged = False
@@ -231,7 +187,7 @@ def test_optimize3():
         print 'Step %d: cost=%f, damping=%f' % (num_steps, cur_cost, damping)
 
         while not converged:
-            ba = bundle.BundleAdjuster(bcur)
+            ba = bundle_adjuster.BundleAdjuster(bcur)
             try:
                 delta = ba.compute_update(bcur, damping, param_mask)
             except np.linalg.LinAlgError:
@@ -240,7 +196,7 @@ def test_optimize3():
                 converged = damping > 1e+8
                 continue
 
-            bnext = bcur.copy_and_update(delta, param_mask) ##
+            bnext = deepcopy(bcur).perturb(delta, param_mask) ##
             next_cost = bnext.cost()
 
             if next_cost < cur_cost:
@@ -276,46 +232,12 @@ def test_optimize3():
     print '\nCost (initial -> estimated -> true)'
     print '  %f -> %f -> %f' % (b_init.cost(), bcur.cost(), b_true.cost())
 
-    import draw_bundle
-    draw_bundle.output_views(bcur, 'out/estimated.pdf')
     draw_bundle.output_views(b_init, 'out/init.pdf')
     draw_bundle.output_views(b_true, 'out/true.pdf')
-
-############################################################################
-class BundleTest(NumpyTestCase):
-    def test_missing_data(self):
-        b = bundle.Bundle(2, 3)
-        b.pts = np.random.rand(b.npts, 3)
-        
-        r = b.residuals()
-        J = b.Jresiduals()
-        self.assertShape(r, (12,))
-        self.assertShape(J, (12, 21))
-        
-        t,f = True,False
-        b.msm_mask = np.array([[t, t, f],
-                               [t, f, t]])
-        r = b.residuals()
-        J = b.Jresiduals()
-        self.assertShape(r, (8,))
-        self.assertShape(J, (8, 21))
+    draw_bundle.output_views(bcur, 'out/estimated.pdf')
 
 ############################################################################
 if __name__ == '__main__':
-    # Run unit tests
-    suite = unittest.TestLoader().loadTestsFromTestCase(BundleTest)
-    unittest.TextTestRunner(verbosity=2).run(suite)
-
-    # Run other tests
-    sensor_model.run_tests()
-
-    check_projection_jacobians()
-    check_bundle_jacobians()
-    
-    check_schur()
-    check_schur_backsub()
-    check_schur_update()
-
     #test_optimize()
     #test_optimize2()
-    test_optimize3()
+    test_optimize_fast()

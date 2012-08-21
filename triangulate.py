@@ -6,7 +6,7 @@ from algebra import *
 def algebraic_lsq(K, Rs, ts, msms):
     A = np.empty((len(Rs)*2, 3))
     b = np.empty(len(Rs)*2)
-    msms = np.asarray(msms)
+    msms = np.asarray(list(msms))
 
     for i in range(len(Rs)):
         b[i*2]   = dots(msms[i,0] * K[2] - K[0], ts[i])

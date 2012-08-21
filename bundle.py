@@ -1,6 +1,7 @@
 from algebra import *
 import lie
 import sensor_model
+import triangulate
 
 ############################################################################
 # Jacobian of homogeneous projection operation -- i.e. algebra.pr(...)
@@ -345,7 +346,7 @@ class Bundle(object):
     def triangulate(self, track):
         Rs = [ self.cameras[idx].R for idx in track.camera_ids() ]
         ts = [ self.cameras[idx].t for idx in track.camera_ids() ]
-        msms = track.measurements.viewvalues()
+        msms = track.measurements.values()
         return triangulate.algebraic_lsq(self.K, Rs, ts, msms)
 
     # Apply a linear update to all cameras and points
@@ -359,7 +360,7 @@ class Bundle(object):
 
             param_mask = np.asarray(param_mask)
             reduced_delta = delta.copy()
-            delta = np.zeros(self.nparams)
+            delta = np.zeros(nparams)
             delta[param_mask] = reduced_delta
 
         assert delta.shape == (nparams,), 'shape was '+str(np.shape(delta))
