@@ -1,6 +1,7 @@
 import numpy as np
 from algebra import *
 
+############################################################################
 # Represents an error model in which the cost of an error is the
 # squared Euclidean norm of the error vector.
 class GaussianModel(object):
@@ -27,6 +28,10 @@ class GaussianModel(object):
         assert np.shape(x) == (2,)
         return self.L
 
+    def clone(self):
+        return GaussianModel(self.cov)
+
+############################################################################
 # Represents an error model in which errors are penalized according to
 # a Cauchy robustifier.
 class CauchyModel(object):
@@ -63,6 +68,8 @@ class CauchyModel(object):
         I = np.eye(2)
         return xx / (r*e*(r*r + self.sigmasqr)) + (r*I - xx/r) * e/(r*r)
 
+    def clone(self):
+        return CauchyModel(self.sigma)
 
 ################################################################################
 # Validation of sensor models

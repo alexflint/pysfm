@@ -43,14 +43,15 @@ def check_jacobian(f, Jf, x0):
     if abserr < 1e-5:
         print 'JACOBIAN IS CORRECT'
     else:
-        if Jf.size < 25:
+        if Jf.size < 100:
             print 'Numeric jacobian:'
             print Jf_numeric
             print 'Analytic jacobian:'
             print Jf
             print 'Residual of jacobian:'
             print Jf_abserr
-        else:
+
+        if Jf.size > 10:
             print 'Numeric Jacobian (sparsity pattern):'
             numpy_test.spy(Jf_numeric)
             print 'Analytic Jacobian (sparsity pattern):'

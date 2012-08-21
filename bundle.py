@@ -1,10 +1,9 @@
 from algebra import *
 import lie
 import sensor_model
-import optimize
 
 ############################################################################
-# Jacobian of projection operation, evaluated at X
+# Jacobian of homogeneous projection operation -- i.e. algebra.pr(...)
 def Jpr(x):
     x = np.asarray(x)
     return np.array([[ 1./x[2],    0,         -x[0] / (x[2]*x[2])],
@@ -54,22 +53,30 @@ class Camera(object):
         self.idx = idx
         self.R = np.asarray(R)
         self.t = np.asarray(t)
-        assert self.R
         
+    # Create a 3x4 projection matrix from the rotation and translation
     def projection_matrix(self):
         return np.hstack((self.R, self.t[:,np.newaxis]))
 
-    def clone(self):
-        return Camera(self.R, self.t, self.idx)
+    # Apply a linear update
+    def perturb(self, delta):
+        assert np.shape(delta) == (6,)
+        self.R = np.dot(self.R, lie.SO3.exp(delta[:3]))
+        self.t += delta[3:]
+        return self
 
-    def update
+    def __str__(self):
+        return repr(self)
+
+    def __repr__(self):
+        return 'Camera(%s)' % \
+            str(self.projection_matrix()).replace('\n','\n       ')
     
 ############################################################################
 # Represents a set of measurements associated with a single 3D point
 class Track(object):
     def __init__(self, camera_ids=[], measurements=[], reconstruction=None):
         assert isinstance(camera_ids, list)
-        assert isinstance(measuremets_ids, list)
         assert len(camera_ids) == len(measurements)
         if reconstruction is None:
             reconstruction = np.zeros(3)
@@ -85,14 +92,29 @@ class Track(object):
     def has_measurement(self, camera_id):
         return camera_id in self.measurements
 
+    def get_measurement(self, camera_id):
+        return self.measurements[camera_id]
+
     def camera_ids(self):
         return self.measurements.viewkeys()
 
-    def clone(self):
-        clone = Track(self.measurements.viewvalues(),
-                      self.measurements.viewvalues(),
-                      self.reconstruction)
-        return clone
+    # Get all camera ids that are in this track and also in camera_ids
+    def intersect_camera_ids(self, camera_ids):
+        return self.measurements.viewkeys() & camera_ids  # set intersections
+
+    # Apply a linear update to this object
+    def perturb(self, delta):
+        assert np.shape(delta) == (3,)
+        self.reconstruction += delta
+        return self
+
+    def __str__(self):
+        return repr(self)
+
+    def __repr__(self):
+        return 'Track(%s)' % (\
+            '\n      '.join([ '%-2d ->  [%10f, %10f]' % (i,m[0],m[1]) \
+                                  for i,m in self.measurements.iteritems() ]))
 
 ############################################################################
 # Represents a set of cameras and points
@@ -100,49 +122,89 @@ class Bundle(object):
     NumCamParams = 6
     NumPointParams = 3
 
-    def __init__(self):
+    def __init__(self, ncameras=0, ntracks=0):
         self.cameras = []
         self.tracks = []
         self.K = np.eye(3)
-
-
-        self.ncameras = ncameras
-        self.npts = npts
-        self.Rs = [ np.eye(3) ] * ncameras
-        self.ts = [ np.zeros(3) ] * ncameras
-        self.pts = [ np.zeros(3) ] * npts
-        self.msm = np.zeros((ncameras, npts, 2))
-        self.msm_mask = np.ones((ncameras, npts), bool)
         self.sensor_model = sensor_model.GaussianModel(1.)
+
+        for i in range(ncameras):
+            self.add_camera()
+
+        for i in range(ntracks):
+            self.add_track()
 
     # Check sizes etc
     def check_consistency(self):
         assert np.shape(self.K) == (3, 3), \
             'shape was '+str(np.shape(self.K))
 
+    # Add a new camera. If a camera is provided, initialize it with
+    # that value. Otherwise, create a camera with default parameters
+    # and add it. In either case, assign the camera the next ID and
+    # return a reference to it.
+    def add_camera(self, camera=None):
+        if camera is None:
+            camera = Camera(np.eye(3), np.zeros(3))
+        camera.idx = len(self.cameras)
+        self.cameras.append(camera)
+        return camera
+
+    # Add a new track. If a track is provided, initialize it with that
+    # value. Otherwise, create an empty track and add it. In either
+    # case, return a reference to the added track.
+    def add_track(self, track=None):
+        if track is None:
+            track = Track()
+        else:
+            # Check camera ids
+            for i,idx in enumerate(track.camera_ids()):
+                if idx < 0 or idx >= len(self.cameras):
+                    raise Error('Invalid camera ID in new track: %d '+ \
+                                '(at track.camera_ids[%d])' % \
+                                    (idx, i))
+        self.tracks.append(track)
+        return track
+
     # Get a list of rotation matrices for all cameras
-    def Rs():
-        return np.array([ cam.R for cam in cameras ])
+    def Rs(self):
+        return np.array([ cam.R for cam in self.cameras ])
 
     # Get a list of translation vectors for all cameras
-    def ts():
-        return np.array([ cam.t for cam in cameras ])
+    def ts(self):
+        return np.array([ cam.t for cam in self.cameras ])
+
+    # Get a list the 3D point reconstructions for all tracks
+    def points(self):
+        return np.array([ track.reconstruction for track in self.tracks ])
 
     # Get the measurement of the j-th track in the i-th camera
     def measurement(self, i, j):
         return self.tracks[j].get_measurement(i)
 
     # Get (camer_id, track_id) pairs for all measurements
-    def measurement_ids(self, i, j):
-        return ( (i,j) for j in range(len(tracks)) for i in trakcs[j].camera_ids() )
+    def measurement_ids(self, track_indices=None):
+        if track_indices is None:
+            track_indices = xrange(len(self.tracks))
+        return ( (i,j) for j in track_indices for i in self.tracks[j].camera_ids() )
+
+    # Get (camer_id, track_id) pairs for all measurements
+    def measurement_ids_for_cameras(self,
+                                    cameras_to_include,
+                                    track_indices=None):
+        if track_indices is None:
+            track_indices = xrange(len(self.tracks))
+        return ( (i,j) 
+                 for j in track_indices 
+                 for i in self.tracks[j].intersect_camera_ids(cameras_to_include) )
 
     # Get the number of free parameters in the entire system
-    def num_params():
-        return len(self.cameras) * Bundle.NumCamParams + len(self.tracks) * Bundle.NumPointParams
+    def num_params(self):
+        return len(self.cameras) * Bundle.NumCamParams + \
+            len(self.tracks) * Bundle.NumPointParams
 
     # Get the prediction for the j-th track in the i-th camera
     def predict(self, i, j):
-        assert self.msm_mask[i,j]
         return project(self.K, self.cameras[i].R, self.cameras[i].t, self.tracks[j].reconstruction)
 
     # Get the element-wise difference between a measurement and its prediction
@@ -173,48 +235,126 @@ class Bundle(object):
         return np.array([ self.reproj_error(i,j) 
                           for (i,j) in self.measurement_ids() ])
 
-    # Get the complete residual vector. It is a vector of length NUM_MEASUREMENTS*2
-    # where NUM_MEASUREMENTS is the sum of the track lengths
+    # Get the complete residual vector.
     def residuals(self):
-        return np.array([ self.residual(i,j)
-                          for (i,j) in self.measurement_ids() ])
+        return np.hstack([ self.residual(i,j) for (i,j) in self.measurement_ids() ])
 
-    # Get the Jacobian of the complete residual vector
+    # Get the complete residual vector. It is a vector of length
+    # NUM_MEASUREMENTS*2 where NUM_MEASUREMENTS is the sum of the
+    # track lengths. If tracks_to_include is not None then only get residuals
+    # for those tracks. If cameras_to_include is not None then
+    # restrict residuals to observations in cameras specified in that
+    # vector.
+    def residuals_partial(self,
+                          cameras_to_include=None,
+                          tracks_to_include=None):
+        if cameras_to_include is None:
+            cameras_to_include = range(len(self.cameras))
+        if tracks_to_include is None:
+            tracks_to_include = range(len(self.tracks))
+        return np.hstack([ self.residual(i,j) 
+                           for (i,j) in self.measurement_ids()
+                           if (i in cameras_to_include and \
+                                   j in tracks_to_include) ])
+        
+
+    # Get the Jacobian of the complete residual vector.
     def Jresiduals(self):
-        msm_ids = list(self.measurement_ids)
+        return self.Jresiduals_extended()[0]
+
+    # Get the Jacobian of the complete residual vector, together with
+    # row and column labels
+    def Jresiduals_extended(self):
+        # TODO: do this the efficient way
+        msm_ids = list(self.measurement_ids())
         J = np.zeros((len(msm_ids)*2, self.num_params()))
-        for msm_idx,(i,j) in enumerate(zip(*np.nonzero(self.msm_mask))):
+        row_labels = np.empty((len(msm_ids)*2, 2), int)
+        col_labels = np.empty((self.num_params(), 2), int)
+        col_offs = len(self.cameras) * Bundle.NumCamParams
+
+        for msm_idx,(i,j) in enumerate(msm_ids):
             # Compute jacobians
             Jr_cam, Jr_x = self.Jresidual(i,j)
 
             # Slot into the main array
             row = msm_idx*2
             camcol = i * Bundle.NumCamParams
-            ptcol = self.ncameras * Bundle.NumCamParams + j * Bundle.NumPointParams
+            ptcol = col_offs + j * Bundle.NumPointParams
             J[ row:row+2, camcol:camcol+Bundle.NumCamParams  ] = Jr_cam
             J[ row:row+2,  ptcol:ptcol+Bundle.NumPointParams ] = Jr_x
 
-        return J
+            row_labels[ row:row+2 ] = (i,j)
+            col_labels[ camcol:camcol+Bundle.NumCamParams ] = (i, -1)
+            col_labels[ ptcol:ptcol+Bundle.NumPointParams ] = (-1, j)
+
+        return J, row_labels, col_labels
+
+    # Get the Jacobian of the complete residual vector. Select rows
+    # and column from the full Jacobian according to the following
+    # rules:
+    #  - if cameras_to_include is not None, restrict rows to
+    #    measurements for those cameras
+    #  - if tracks_to_include is not None, restrict rows to
+    #    measurements for those tracks
+    #  - if cameras_to_optimize is not None, restrict columns to
+    #    parameters for those cameras
+    #  - if tracks_to_optimize is not None, restrict columns to
+    #    parameters for those tracks
+    def Jresiduals_partial(self,
+                           cameras_to_include=None,
+                           tracks_to_include=None,
+                           cameras_to_optimize=None,
+                           tracks_to_optimize=None):
+        J,rowlabels,collabels = self.Jresiduals_extended()
+        nc = len(self.cameras)
+        nt = len(self.tracks)
+
+        # convenience function
+        def list_to_mask(L, n):
+            if L is None:
+                return np.ones(n, bool)
+            else:
+                mask = np.zeros(n, bool)
+                mask[L] = True
+                return mask
+
+        # Decide which rows to include
+        include_mask_cams = list_to_mask(cameras_to_include, nc)
+        include_mask_tracks = list_to_mask(tracks_to_include, nt)
+        rowmask = np.logical_and( include_mask_cams.take(rowlabels[:,0]),
+                                  include_mask_tracks.take(rowlabels[:,1]) )
+
+        # Decide which columns to include
+        colmask = np.ones(J.shape[1], bool)
+        if cameras_to_optimize is not None:
+            opt_mask_cams = list_to_mask(cameras_to_optimize, nc)
+            colmask[ : nc*6 ] = opt_mask_cams.take(collabels[ : nc*6 , 0])
+
+        if tracks_to_optimize is not None:
+            opt_mask_tracks = list_to_mask(tracks_to_optimize, nt)
+            colmask[ nc*6 : ] = opt_mask_tracks.take(collabels[ nc*6 : , 1])
+
+        # Return the array
+        return J[ rowmask ].T[ colmask ].T
 
     # Get the total cost of the system
     def cost(self):
         return np.sum(np.square(self.residuals()))
 
-    # Clone this object
-    def clone(self):
-        clone = Bundle()
-        clone.K = self.K.copy()
-        clone.tracks = [ t.clone() for t in self.tracks ]
-        clone.cameras = [ cam.clone for cam in self.cameras ]
-        clone.sensor_model = self.sensor_model
-        return clone
+    # Triangulate the position of a track. Returns a 3-vector
+    def triangulate(self, track):
+        Rs = [ self.cameras[idx].R for idx in track.camera_ids() ]
+        ts = [ self.cameras[idx].t for idx in track.camera_ids() ]
+        msms = track.measurements.viewvalues()
+        return triangulate.algebraic_lsq(self.K, Rs, ts, msms)
 
     # Apply a linear update to all cameras and points
-    def apply_update(self, delta, param_mask=None):
+    def perturb(self, delta, param_mask=None):
         delta = np.asarray(delta)
+        nparams = self.num_params()
 
         if param_mask is not None:
-            assert len(param_mask) == self.nparams, \
+            assert np.shape(param_mask) == (nparams,), \
                 'shape was '+str(np.shape(param_mask))
 
             param_mask = np.asarray(param_mask)
@@ -222,149 +362,52 @@ class Bundle(object):
             delta = np.zeros(self.nparams)
             delta[param_mask] = reduced_delta
 
-        assert delta.shape == (self.nparams,), 'shape was '+str(np.shape(delta))
+        assert delta.shape == (nparams,), 'shape was '+str(np.shape(delta))
 
         for i,cam in enumerate(self.cameras):
-            cam.update( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
+            cam.perturb( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
 
-        offs = self.ncameras*Bundle.NumCamParams
+        offs = len(self.cameras) * Bundle.NumCamParams
         for i,track in enumerate(self.tracks):
-            track.update( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
+            track.perturb( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
 
-    # Clone this object and apply a linear update to the clone
-    def copy_and_update(self, delta, param_mask=None):
-        clone = self.clone()
-        clone.apply_update(delta, param_mask)
-        return clone
+        return self
 
+    # Create a bundle from matrices of observations. For N cameras and M tracks:
+    #  - K should 3 x 3
+    #  - Rs should be N x 3 x 3
+    #  - ts should be N x 3
+    #  - measurements should be N x M x 2
+    #  - measurement_mask should be N x M and of type bool
+    # every False element of measurement_mask corresponds to a missing measurement
+    @classmethod
+    def FromArrays(cls, K, Rs, ts, pts, measurements, measurement_mask=None):
+        K = np.asarray(K)
+        Rs = np.asarray(Rs)
+        ts = np.asarray(ts)
+        measurements = np.asarray(measurements)
 
+        if measurement_mask is None:
+            measurement_mask = np.ones(measurements.shape[:-1], bool)
 
-############################################################################
-class BundleAdjuster:
-    def __init__(self, bundle):
-        self.b = bundle
-        nc = bundle.ncameras
-        npts = bundle.npts
-        self.HCCs = np.empty((nc, 6, 6))        # 6x6 diagonal blocks of top left part
-        self.HCPs = np.empty((nc, npts, 6, 3))  # complete blocks of the off-diagonal part
-        self.HPPs = np.empty((npts, 3, 3))      # 3x3 on-diagonal blocks of the bottom right part
-        self.HPP_invs = np.empty((npts, 3, 3))  # block-wise inverse of above
-        self.bCs = np.empty((nc, 6))            # top part of J.T * r     (i.e. RHS of normal eqns)
-        self.bPs = np.empty((npts, 3))          # bottom part of J.T * r  (i.e. RHS of normal eqns)
+        # Check sizes
+        assert len(Rs) == len(ts)
+        assert np.shape(Rs)[1:] == (3,3)
+        assert np.shape(ts)[1:] == (3,)
+        assert measurements.shape[0] == len(Rs)
+        assert measurements.shape[2] == 2
+        assert measurement_mask.shape == measurements.shape[:-1]
 
-    # Solve the normal equations using the schur complement.
-    # Return (update-for-cameras), (update-for-points)
-    def compute_update(self, bundle, damping, param_mask=None):
-        self.set_bundle(bundle)
-
-        # The way we do parameter elimination here is in fact
-        # mathematically equivalent to eliminating the parameters from
-        # the original matrix. It is slightly inefficient though.
-        if param_mask is None:
-            param_mask = np.ones(self.b.nparams).astype(bool)
-        else:
-            assert param_mask.dtype == bool
-            assert np.shape(param_mask) == (self.b.nparams,) , \
-                'shape was %s by there are %d parameters' % \
-                (str(np.shape(param_mask)), self.b.nparams)
-
-        # Get parameter masks for camera / point parameters
-        cam_param_mask = param_mask[:self.b.ncameras*6 ]
-        pt_param_mask =  param_mask[ self.b.ncameras*6:]
-        assert np.all(pt_param_mask), 'Eliminating point parameters not implemented'
-        
-        # Compute schur complement
-        self.prepare_schur_complement(damping)
-        AC, bC = self.compute_schur_complement()
-
-        # Eliminate some parameters
-        AC = AC[cam_param_mask].T[cam_param_mask].T
-        bC = bC[cam_param_mask]
-
-        # Solve normal equations and backsubstitute
-        dC = np.zeros(bundle.ncameras*6)
-        dC[cam_param_mask] = np.linalg.solve(AC, bC)
-        dP = self.backsubstitute(dC)
-        return -np.concatenate((dC[cam_param_mask], dP))
-
-    # Configure the bundle that this adjuster operates on
-    def set_bundle(self, bundle):
-        assert bundle.ncameras == self.b.ncameras, 'Bundle must not change number of parameters'
-        assert bundle.npts == self.b.npts, 'Bundle must not change number of parameters'
-        self.b = bundle
-
-    # Compute components of the Hessian that will be used in the Schur complement
-    def prepare_schur_complement(self, damping=0.):
-        nc = self.b.ncameras
-        npts = self.b.npts
-
-        # Fill with zeros in preparation for summing
-        self.HCCs.fill(0.)
-        self.HPPs.fill(0.)
-        self.HCPs.fill(0.)
-        self.bCs.fill(0.)
-        self.bPs.fill(0.)
-
-        # Compute various components
-        for i,j in zip(*np.nonzero(self.b.msm_mask)):
-            err_ij = self.b.reproj_error(i, j)
-            r = self.b.sensor_model.residual_from_error(err_ij)
-            Jcost_r = self.b.sensor_model.Jresidual_from_error(err_ij)
-            Jr_cam = Jproject_cam(self.b.K, self.b.Rs[i], self.b.ts[i], self.b.pts[j])
-            Jr_pt = Jproject_x(self.b.K, self.b.Rs[i], self.b.ts[i], self.b.pts[j])
-            Jc = dots(Jcost_r, Jr_cam)
-            Jp = dots(Jcost_r, Jr_pt)
-            self.HCCs[i] += dots(Jc.T, Jc)
-            self.HPPs[j] += dots(Jp.T, Jp)
-            self.HCPs[i,j] = dots(Jc.T, Jp)
-            self.bCs[i] += dots(Jc.T, r)
-            self.bPs[j] += dots(Jp.T, r)
-
-        # Apply damping to diagonal
-        if damping > 0.:
-            for i in range(nc):
-                optimize.apply_lm_damping_inplace(self.HCCs[i], damping)
-            for i in range(npts):
-                optimize.apply_lm_damping_inplace(self.HPPs[i], damping)
-
-        # Invert the lower right sub-matrix (which is block-diagonal)
-        for j in range(npts):
-            self.HPP_invs[j] = np.linalg.inv(self.HPPs[j])
-
-    # Compute the schur complement for the normal equations
-    def compute_schur_complement(self, damping=0.):
-        nc = self.b.ncameras
-        npts = self.b.npts
-
-        S = np.zeros((nc*6, nc*6))
-        b = np.zeros(nc*6)
-
-        for i in range(nc):
-            S[ i*6:(i+1)*6, i*6:(i+1)*6 ] = self.HCCs[i]
-            b[ i*6:(i+1)*6 ] = self.bCs[i]
-
-        for k in range(npts):
-            # Find cameras that measured this point
-            msm_cameras = np.nonzero(self.b.msm_mask[:,k])[0]
-            for i in msm_cameras:
-                b[ i*6:(i+1)*6 ] -= dots(self.HCPs[i,k], self.HPP_invs[k], self.bPs[k])
-                for j in msm_cameras:
-                    S[ i*6:(i+1)*6, j*6:(j+1)*6 ] -= \
-                        dots(self.HCPs[i,k], self.HPP_invs[k], self.HCPs[j,k].T)
-
-        return S,b
-
-    # Compute the update for the points from the update for the cameras
-    def backsubstitute(self, dC):
-        dP = np.zeros(self.b.npts*3)
-        for i in range(self.b.npts):
-            # Find cameras that measured this point
-            msm_cameras = np.nonzero(self.b.msm_mask[:,i])[0]
-
-            dPi = self.bPs[i]
-            for j in msm_cameras:
-                dPi -= dots(self.HCPs[j,i].T, dC[j*6 : (j+1)*6])
-            dPi = dots(self.HPP_invs[i], dPi)
-            dP[ i*3 : (i+1)*3 ] = dPi
-
-        return dP
+        # Create the bundle
+        b = Bundle()
+        b.K = K
+        for R,t in zip(Rs,ts):
+            b.add_camera(Camera(R,t))
+        for i in range(measurements.shape[1]):
+            camera_ids = list(np.nonzero(measurement_mask[:,i])[0])
+            msms = measurements[ camera_ids, i ]
+            t = b.add_track(Track(camera_ids, msms))
+            t.reconstruction = pts[i]
+            
+        # Return the bundle
+        return b

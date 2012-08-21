@@ -28,40 +28,41 @@ def rotation_xz(th):
 
 def create_test_bundle(noise=.1):
     NUM_CAMERAS        = 4
-    NUM_POINTS         = 50
+    NUM_POINTS         = 5
     POINT_CLOUD_RADIUS = 5.
     MISSING_FRAC       = .1     # fraction of measurements that are missing
-    OUTLIER_FRAC       = 0    # fraction of measurements that are outliers
+    OUTLIER_FRAC       = 0      # fraction of measurements that are outliers
     OUTLIER_RANGE      = 10.    # bounds of uniform distribution from which outliers are sampled
+    CAUCHY_PARAM       = .05    # determines the width of the robustifier
 
-    # Create a bundle
+    # Setup some cameras
     np.random.seed(1111)  # for repeatability
-    b = bundle.Bundle(NUM_CAMERAS, NUM_POINTS)
-    b.K = np.array([[  2.,  0., -.5  ],
-                    [ .05,  3.,  .1  ],
-                    [  0.,  0.,   1. ]])
+    K = np.array([[  2.,  0., -.5  ],
+                  [ .05,  3.,  .1  ],
+                  [  0.,  0.,   1. ]])
 
-    b.Rs = [ eye(3), rotation_xy(.3), rotation_xz(.4), rotation_xy(.1) ]
-    b.ts = np.array([[  0.,  0.,  0. ],
-                     [ -1,   0.,  1. ],
-                     [  1.,  2.,  3. ],
-                     [  0.,  0., -1. ]])
-    b.pts = np.random.randn(NUM_POINTS, 3) * POINT_CLOUD_RADIUS
-    b.pts[:,2] += 10   # ensure points are not close to focal plane
+    Rs = [ eye(3), rotation_xy(.3), rotation_xz(.4), rotation_xy(.1) ]
+    ts = np.array([[  0.,  0.,  0. ],
+                   [ -1,   0.,  1. ],
+                   [  1.,  2.,  3. ],
+                   [  0.,  0., -1. ]])
 
-    # Attach robustifier
-    b.sensor_model = sensor_model.CauchyModel(.05)
+    # Sample 3D points
+    pts = np.random.randn(NUM_POINTS, 3) * POINT_CLOUD_RADIUS
+    pts[:,2] += 10   # ensure points are not close to focal plane
 
-    # Populate measurements with ideal projections plus measurement noise
-    np.random.seed(876)  # for repeatability
-    b.msm = b.predictions().reshape(b.msm.shape) + np.random.randn(*b.msm.shape)*noise
+    # Compute ideal projections and add noise
+    msm = np.array([[ bundle.project(K, R, t, pt) for pt in pts ]
+                    for (R,t) in zip(Rs,ts) ])
+    msm += np.random.randn(*msm.shape) * noise
 
     # Mark some measurements as missing
     np.random.seed(4309)  # for repeatability
+    msm_mask = np.ones(msm.shape[:2], bool)
     nmissing = int(MISSING_FRAC * NUM_POINTS)
     for i in range(NUM_CAMERAS):
-        missing_inds = np.random.randint(0, NUM_POINTS, nmissing)
-        b.msm_mask[i, missing_inds] = False
+        missing_inds = np.random.permutation(NUM_POINTS)[:nmissing]
+        msm_mask[i, missing_inds] = False
 
     # Generate some outliers by replacing measurements with random data
     np.random.seed(101)  # for repeatability
@@ -71,7 +72,13 @@ def create_test_bundle(noise=.1):
         outlier_inds = np.random.permutation(NUM_POINTS)[:noutliers]
         outlier_mask[i,outlier_inds] = True
         for j in outlier_inds:
-            b.msm[i,j] = np.random.uniform(-OUTLIER_RANGE, OUTLIER_RANGE, 2)
+            msm[i,j] = np.random.uniform(-OUTLIER_RANGE, OUTLIER_RANGE, 2)
+
+    # Create the bundle
+    b = bundle.Bundle.FromArrays(K, Rs, ts, pts, msm, msm_mask)
+
+    # Attach robustifier
+    b.sensor_model = sensor_model.CauchyModel(CAUCHY_PARAM)
 
     # Store this for visualization later
     b.outlier_mask = outlier_mask
@@ -113,106 +120,6 @@ def report_bundle(bundle, name):
     print name, 'cost:'
     print bundle.cost()
 
-############################################################################
-def check_projection_jacobians():
-    K0 = np.array([[ 2., 0., -1.5 ],
-                   [ .1, 3., .8 ],
-                   [ 0., 0., 1. ]])
-    R0 = rotation_xy(1.1)
-    t0 = np.array([4., 2., -1.])
-    x0 = np.array([ -1., 5., 2. ])
-
-    print '\nChecking Jproject_t'
-    finite_differences.check_jacobian(lambda t: bundle.project(K0, R0, t, x0),
-                                      bundle.Jproject_t(K0, R0, t0, x0),
-                                      t0)
-
-    print '\nChecking Jproject_x'
-    finite_differences.check_jacobian(lambda x: bundle.project(K0, R0, t0, x),
-                                      bundle.Jproject_x(K0, R0, t0, x0),
-                                      x0)
-
-    print '\nChecking Jproject_R'
-    finite_differences.check_jacobian(lambda m: bundle.project2(K0, R0, m, t0, x0),
-                                      bundle.Jproject_R(K0, R0, t0, x0),
-                                      np.zeros(3))
-
-############################################################################
-def check_bundle_jacobians():
-    print '\nChecking bundle jacobians'
-    b_init = create_test_bundle()
-    return finite_differences.check_jacobian(
-        lambda v: b_init.copy_and_update(v).residuals(),
-        b_init.Jresiduals(),
-        np.zeros(b_init.nparams))
-
-
-############################################################################
-def check_schur():
-    b = create_test_bundle()
-
-    r = b.residuals()
-    J = b.Jresiduals();
-    JTJ = dots(J.T, J)
-    JTr = dots(J.T, r)
-
-    optimize.apply_lm_damping_inplace(JTJ, 1.)
-    Aslow, bslow = schur.get_schur_complement(JTJ, JTr, 6*b.ncameras)
-
-    ba = bundle.BundleAdjuster(b)
-    ba.prepare_schur_complement(1.)
-    A,b = ba.compute_schur_complement()
-
-    err = np.sum(np.abs(A-Aslow))
-    print 'Error in Schur complement LHS: '+str(err)
-
-    err = np.sum(np.abs(b-bslow))
-    print 'Error in Schur complement RHS: '+str(err)
-
-############################################################################
-def check_schur_backsub():
-    b = create_test_bundle()
-
-    r = b.residuals()
-    J = b.Jresiduals();
-    JTJ = dots(J.T, J)
-    JTr = dots(J.T, r)
-
-    damping = 2.
-    optimize.apply_lm_damping_inplace(JTJ, damping)
-    delta_slow = np.linalg.solve(JTJ, JTr);
-
-    ba = bundle.BundleAdjuster(b)
-    ba.prepare_schur_complement(damping)
-    A,b = ba.compute_schur_complement()
-    dC = np.linalg.solve(A, b)
-    dP = ba.backsubstitute(dC)
-
-    dC_err = np.max(np.abs(dC - delta_slow[:len(dC)]))
-    dP_err = np.max(np.abs(dP - delta_slow[len(dC):]))
-
-    print 'Error in dP (Schur solution): '+str(dC_err)
-    print 'Error in dC (Schur solution): '+str(dP_err)
-
-############################################################################
-def check_schur_update():
-    b = create_test_bundle()
-    damping = 2.
-
-    r = b.residuals()
-    J = b.Jresiduals();
-    JTJ = dots(J.T, J)
-    JTr = dots(J.T, r)
-
-    optimize.apply_lm_damping_inplace(JTJ, damping)
-    delta_slow = -np.linalg.solve(JTJ, JTr);
-
-    ba = bundle.BundleAdjuster(b)
-    delta = ba.compute_update(b, damping)
-
-    delta_err = np.max(np.abs(delta - delta_slow))
-
-    print 'Error in delta (Schur solution): '+str(delta_err)
 
 ############################################################################
 # Optimize bundle parameters
