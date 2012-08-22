@@ -20,7 +20,7 @@ def rotation_xz(th):
 
 def create_test_bundle(noise=.1):
     NUM_CAMERAS        = 4
-    NUM_POINTS         = 5
+    NUM_POINTS         = 10
     POINT_CLOUD_RADIUS = 5.
     MISSING_FRAC       = .1     # fraction of measurements that are missing
     OUTLIER_FRAC       = 0      # fraction of measurements that are outliers

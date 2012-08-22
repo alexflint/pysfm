@@ -161,8 +161,6 @@ class Bundle(object):
             # Check camera ids
             for i,idx in enumerate(track.camera_ids()):
                 if idx < 0 or idx >= len(self.cameras):
-                    print idx
-                    print i
                     fmt = 'Invalid camera ID=%d in new track at camera_ids[%d])'
                     raise Exception(fmt % (int(idx), i))
 
@@ -242,104 +240,6 @@ class Bundle(object):
     def residuals(self):
         return np.hstack([ self.residual(i,j) for (i,j) in self.measurement_ids() ])
 
-    # Get the complete residual vector. It is a vector of length
-    # NUM_MEASUREMENTS*2 where NUM_MEASUREMENTS is the sum of the
-    # track lengths. If tracks_to_include is not None then only get residuals
-    # for those tracks. If cameras_to_include is not None then
-    # restrict residuals to observations in cameras specified in that
-    # vector.
-    def residuals_partial(self,
-                          cameras_to_include=None,
-                          tracks_to_include=None):
-        if cameras_to_include is None:
-            cameras_to_include = range(len(self.cameras))
-        if tracks_to_include is None:
-            tracks_to_include = range(len(self.tracks))
-        return np.hstack([ self.residual(i,j) 
-                           for (i,j) in self.measurement_ids()
-                           if (i in cameras_to_include and \
-                                   j in tracks_to_include) ])
-        
-
-    # Get the Jacobian of the complete residual vector.
-    def Jresiduals(self):
-        return self.Jresiduals_extended()[0]
-
-    # Get the Jacobian of the complete residual vector, together with
-    # row and column labels
-    def Jresiduals_extended(self):
-        # TODO: do this the efficient way
-        msm_ids = list(self.measurement_ids())
-        J = np.zeros((len(msm_ids)*2, self.num_params()))
-        row_labels = np.empty((len(msm_ids)*2, 2), int)
-        col_labels = np.empty((self.num_params(), 2), int)
-        col_offs = len(self.cameras) * Bundle.NumCamParams
-
-        for msm_idx,(i,j) in enumerate(msm_ids):
-            # Compute jacobians
-            Jr_cam, Jr_x = self.Jresidual(i,j)
-
-            # Slot into the main array
-            row = msm_idx*2
-            camcol = i * Bundle.NumCamParams
-            ptcol = col_offs + j * Bundle.NumPointParams
-            J[ row:row+2, camcol:camcol+Bundle.NumCamParams  ] = Jr_cam
-            J[ row:row+2,  ptcol:ptcol+Bundle.NumPointParams ] = Jr_x
-
-            row_labels[ row:row+2 ] = (i,j)
-            col_labels[ camcol:camcol+Bundle.NumCamParams ] = (i, -1)
-            col_labels[ ptcol:ptcol+Bundle.NumPointParams ] = (-1, j)
-
-        return J, row_labels, col_labels
-
-    # Get the Jacobian of the complete residual vector. Select rows
-    # and column from the full Jacobian according to the following
-    # rules:
-    #  - if cameras_to_include is not None, restrict rows to
-    #    measurements for those cameras
-    #  - if tracks_to_include is not None, restrict rows to
-    #    measurements for those tracks
-    #  - if cameras_to_optimize is not None, restrict columns to
-    #    parameters for those cameras
-    #  - if tracks_to_optimize is not None, restrict columns to
-    #    parameters for those tracks
-    def Jresiduals_partial(self,
-                           cameras_to_include=None,
-                           tracks_to_include=None,
-                           cameras_to_optimize=None,
-                           tracks_to_optimize=None):
-        J,rowlabels,collabels = self.Jresiduals_extended()
-        nc = len(self.cameras)
-        nt = len(self.tracks)
-
-        # convenience function
-        def list_to_mask(L, n):
-            if L is None:
-                return np.ones(n, bool)
-            else:
-                mask = np.zeros(n, bool)
-                mask[L] = True
-                return mask
-
-        # Decide which rows to include
-        include_mask_cams = list_to_mask(cameras_to_include, nc)
-        include_mask_tracks = list_to_mask(tracks_to_include, nt)
-        rowmask = np.logical_and( include_mask_cams.take(rowlabels[:,0]),
-                                  include_mask_tracks.take(rowlabels[:,1]) )
-
-        # Decide which columns to include
-        colmask = np.ones(J.shape[1], bool)
-        if cameras_to_optimize is not None:
-            opt_mask_cams = list_to_mask(cameras_to_optimize, nc)
-            colmask[ : nc*6 ] = opt_mask_cams.take(collabels[ : nc*6 , 0])
-
-        if tracks_to_optimize is not None:
-            opt_mask_tracks = list_to_mask(tracks_to_optimize, nt)
-            colmask[ nc*6 : ] = opt_mask_tracks.take(collabels[ nc*6 : , 1])
-
-        # Return the array
-        return J[ rowmask ].T[ colmask ].T
-
     # Get the total cost of the system
     def cost(self):
         return np.sum(np.square(self.residuals()))
@@ -355,31 +255,6 @@ class Bundle(object):
     def triangulate_all(self):
         for track in self.tracks:
             track.reconstruction = self.triangulate(track)
-
-    # Apply a linear update to all cameras and points
-    def perturb(self, delta, param_mask=None):
-        delta = np.asarray(delta)
-        nparams = self.num_params()
-
-        if param_mask is not None:
-            assert np.shape(param_mask) == (nparams,), \
-                'shape was '+str(np.shape(param_mask))
-
-            param_mask = np.asarray(param_mask)
-            reduced_delta = delta.copy()
-            delta = np.zeros(nparams)
-            delta[param_mask] = reduced_delta
-
-        assert delta.shape == (nparams,), 'shape was '+str(np.shape(delta))
-
-        for i,cam in enumerate(self.cameras):
-            cam.perturb( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
-
-        offs = len(self.cameras) * Bundle.NumCamParams
-        for i,track in enumerate(self.tracks):
-            track.perturb( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
-
-        return self
 
     # Create a bundle from matrices of observations. For N cameras and M tracks:
     #  - K should 3 x 3
@@ -419,3 +294,117 @@ class Bundle(object):
             
         # Return the bundle
         return b
+
+
+
+
+
+
+    ################################################################################
+    # These functions are now only used for unit-testing bundle adjustment. They are
+    # not used "in production". They should be moved elsewhere
+    ################################################################################
+
+    # Apply a linear update to all cameras and points
+    def perturb(self, delta, param_mask=None):
+        delta = np.asarray(delta)
+        nparams = self.num_params()
+
+        if param_mask is not None:
+            assert np.shape(param_mask) == (nparams,), \
+                'shape was '+str(np.shape(param_mask))
+
+            param_mask = np.asarray(param_mask)
+            reduced_delta = delta.copy()
+            delta = np.zeros(nparams)
+            delta[param_mask] = reduced_delta
+
+        assert delta.shape == (nparams,), 'shape was '+str(np.shape(delta))
+
+        for i,cam in enumerate(self.cameras):
+            cam.perturb( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
+
+        offs = len(self.cameras) * Bundle.NumCamParams
+        for i,track in enumerate(self.tracks):
+            track.perturb( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
+
+        return self
+
+
+    # Get the complete residual vector. It is a vector of length
+    # NUM_MEASUREMENTS*2 where NUM_MEASUREMENTS is the sum of the
+    # track lengths. If tracks_to_include is not None then only get residuals
+    # for those tracks. If cameras_to_include is not None then
+    # restrict residuals to observations in cameras specified in that
+    # vector.
+    def residuals_partial(self, camera_ids, track_ids):
+        nc = len(camera_ids)
+        nt = len(track_ids)
+        nparams = nc*6 + nt*3
+        col_offs = nc*6
+
+        # Build up the jacobian as a list of rows where each chunk is
+        # a pair of rows corresponding to a particular measurement.
+        chunks = []
+        for jpos,j in enumerate(track_ids):
+            track = self.tracks[j]
+            for ipos,i in enumerate(camera_ids):
+                if track.has_measurement(i):
+                    chunks.append(self.residual(i,j))
+        return np.hstack(chunks)
+
+    # Get the Jacobian of the complete residual vector.
+    def Jresiduals(self):
+        return self.Jresiduals_extended()[0]
+
+    # Get the Jacobian of the complete residual vector, together with
+    # row and column labels
+    def Jresiduals_extended(self):
+        # TODO: do this the efficient way
+        msm_ids = list(self.measurement_ids())
+        J = np.zeros((len(msm_ids)*2, self.num_params()))
+        row_labels = np.empty((len(msm_ids)*2, 2), int)
+        col_labels = np.empty((self.num_params(), 2), int)
+        col_offs = len(self.cameras) * Bundle.NumCamParams
+
+        for msm_idx,(i,j) in enumerate(msm_ids):
+            # Compute jacobians
+            Jr_cam, Jr_x = self.Jresidual(i,j)
+
+            # Slot into the main array
+            row = msm_idx*2
+            camcol = i * Bundle.NumCamParams
+            ptcol = col_offs + j * Bundle.NumPointParams
+            J[ row:row+2, camcol:camcol+Bundle.NumCamParams  ] = Jr_cam
+            J[ row:row+2,  ptcol:ptcol+Bundle.NumPointParams ] = Jr_x
+
+            row_labels[ row:row+2 ] = (i,j)
+            col_labels[ camcol:camcol+Bundle.NumCamParams ] = (i, -1)
+            col_labels[ ptcol:ptcol+Bundle.NumPointParams ] = (-1, j)
+
+        return J, row_labels, col_labels
+
+    # Get the Jacobian of the residual vector restricted to a set of cameras and tracks
+    def Jresiduals_partial(self, camera_ids=None, track_ids=None):
+        nc = len(camera_ids)
+        nt = len(track_ids)
+        nparams = nc*6 + nt*3
+        col_offs = nc*6
+
+        # Build up the jacobian as a list of rows where each chunk is
+        # a pair of rows corresponding to a particular measurement.
+        chunks = []
+        for jpos,j in enumerate(track_ids):
+            track = self.tracks[j]
+            for ipos,i in enumerate(camera_ids):
+                if track.has_measurement(i):
+                    chunk = np.zeros((2, nparams))
+                    camcol = ipos * Bundle.NumCamParams
+                    ptcol = col_offs + jpos * Bundle.NumPointParams
+
+                    Jr_cam, Jr_x = self.Jresidual(i,j)
+                    chunk[ :, camcol:camcol+Bundle.NumCamParams  ] = Jr_cam
+                    chunk[ :,  ptcol:ptcol+Bundle.NumPointParams ] = Jr_x
+                    chunks.append(chunk)
+
+        return np.vstack(chunks)

@@ -48,33 +48,40 @@ class BundleAdjuster:
             self.camera_ids = range(len(bundle.cameras))
         else:
             self.camera_ids = list(camera_ids)
-            assert self.camera_ids.dtype.kind == 'i'
-            assert self.camera_ids.min() >= 0
-            assert self.camera_ids.max() < len(bundle.cameras)
+            assert type(self.camera_ids[0]) is int
+            assert np.min(self.camera_ids) >= 0
+            assert np.max(self.camera_ids) < len(bundle.cameras)
 
         # Figure out the track indices
         if track_ids is None:
             self.track_ids = range(len(bundle.tracks))
         else:
             self.track_ids = list(track_ids)
-            assert self.track_ids.dtype.kind == 'i'
-            assert self.track_ids.min() >= 0
-            assert self.track_ids.max() < len(bundle.tracks)
+            assert type(self.track_ids[0]) is int
+            assert np.min(self.track_ids) >= 0
+            assert np.max(self.track_ids) < len(bundle.tracks)
 
         self.camera_id_set = set(self.camera_ids)
 
         # Figure out which subset we're optimizing
         if camera_mask is None:
-            self.optim_camera_ids = self.camera_ids[1:]  # by default adjust all but the first camera
+            assert len(self.camera_ids) > 1, 'Cannot optimize just one camera'
+            # by default adjust all but the first camera
+            self.optim_camera_ids = self.camera_ids[1:]  
             self.optim_camera_indices = range(1,len(self.camera_ids))
         else:
             self.optim_camera_ids, self.optim_camera_indices = select(self.camera_ids, camera_mask)
 
         if track_mask is None:
-            self.optim_track_ids = copy(self.track_ids)       # by default adjust all tracks
-            self.optim_track_indices = range(1,len(self.track_ids))
+            # by default adjust all tracks
+            self.optim_track_ids = copy(self.track_ids)
+            self.optim_track_indices = range(len(self.track_ids))
         else:
             self.optim_track_ids, self.optim_track_indices = select(self.track_ids, track_mask)
+
+        # Consistency check
+        assert len(self.optim_track_ids) == len(self.optim_track_indices)
+        assert len(self.optim_camera_ids) == len(self.optim_camera_indices)
 
         # Allocate arrays
         nc = len(self.camera_ids)
@@ -101,7 +108,7 @@ class BundleAdjuster:
             while not self.converged:
                 # Compute update
                 try:
-                    delta = self.compute_update(damping, param_mask)
+                    motion_update,structure_update = self.compute_update(damping, param_mask)
                 except np.linalg.LinAlgError:
                     # Matrix was singular: increase damping
                     damping *= 10.
@@ -109,7 +116,9 @@ class BundleAdjuster:
                     continue
 
                 # Apply update
-                bnext = deepcopy(self.bundle).perturb(delta, param_mask)
+                bnext = deepcopy(self.bundle)
+                self.update_motion(motion_update, bnext)
+                self.update_structure(structure_update, bnext)
                 next_cost = bnext.cost()
 
                 # Decide whether to accept it
@@ -132,14 +141,14 @@ class BundleAdjuster:
     # Solve the normal equations using the schur complement.
     # Return (update-for-cameras), (update-for-points)
     def compute_update(self, damping, param_mask=None):
-        nc = len(self.camera_ids)
-        nt = len(self.track_ids)
+        nc = len(self.optim_camera_ids)
+        nt = len(self.optim_track_ids)
 
         # The way we do parameter elimination here is in fact
         # mathematically equivalent to eliminating the parameters from
         # the original matrix. It is slightly inefficient though.
         if param_mask is None:
-            param_mask = np.ones(6*nc + 3*nt)
+            param_mask = np.ones(6*nc + 3*nt, bool)
         else:
             assert param_mask.dtype.kind == 'b'
             assert np.shape(param_mask) == (6*nc + 3*nt,) , \
@@ -155,9 +164,9 @@ class BundleAdjuster:
         self.prepare_schur_complement()
         self.apply_damping(damping)
         S, b = self.compute_schur_complement()
-        cam_update = self.solve_camera_normal_eqns(S, b, cam_param_mask)
-        point_update = self.backsubstitute(cam_update)
-        return -cam_update, -point_update
+        motion_update = self.solve_motion_normal_eqns(S, b, cam_param_mask)
+        structure_update = self.backsubstitute(motion_update)
+        return -motion_update, -structure_update
 
     # Compute components of the Hessian that will be used in the Schur complement
     def prepare_schur_complement(self):
@@ -228,11 +237,11 @@ class BundleAdjuster:
         return S,b
 
     # Solve the normal equations for the camera system
-    def solve_camera_normal_eqns(self, S, b, param_mask):
+    def solve_motion_normal_eqns(self, S, b, param_mask):
         nc = len(self.optim_camera_ids)
         assert np.shape(S) == (nc,nc,6,6)
         assert np.shape(b) == (nc,6)
-        assert np.shape(param_mask) == (nc,)
+        assert np.shape(param_mask) == (nc*6,), 'shape was '+str(np.shape(param_mask))
 
         # S is a nc x nc array where each element is a 6x6 matrix. So
         # it has 4 dimensions. We want to "flatten" it to a 6*nc x
@@ -253,24 +262,33 @@ class BundleAdjuster:
 
         # Split into per-camera updates
         return dC.reshape(nc,6)
-        
 
     # Backsubstitute a solution for the camera update into the normal
     # equations to get a list of updates for each 3D point.
     def backsubstitute(self, dC):
-        bundle = self.bundle
-
-        # Compute updates
         nt = len(self.optim_track_ids)
         dP = np.zeros((nt, 3))
-        for ipos,i in enumerate(self.optim_tracks_indices):
+        for ipos,i in enumerate(self.optim_track_indices):
             # Here we again sum over all cameras, even though some
             # cameras may not have observed this track. But the
             # Hessian blocks for those will be zero so we're still in
             # good shape.
             dP[ipos] = self.bPs[i]
-            for j,jpos in enumerate(self.optim_camera_indices):
+            for jpos,j in enumerate(self.optim_camera_indices):
                 dP[ipos] -= dots(self.HCPs[j,i].T, dC[jpos])
             dP[ipos] = dots(self.HPP_invs[i], dP[ipos])
 
         return dP
+
+    # Update camera parameters given the solution to the normal equations
+    def update_motion(self, delta, bundle):
+        assert np.shape(delta) == (len(self.optim_camera_ids), 6)
+        for pos,idx in enumerate(self.optim_camera_ids):
+            bundle.cameras[idx].perturb(delta[pos])
+
+    # Update 3D point parameters given the solution to the normal equations
+    def update_structure(self, delta, bundle):
+        assert np.shape(delta) == (len(self.optim_track_ids), 3)
+        for pos,idx in enumerate(self.optim_track_ids):
+            bundle.tracks[idx].perturb(delta[pos])
+

@@ -10,7 +10,13 @@ def spy(A, t=1e-8, stream=None):
         stream = sys.stdout
 
     A = np.asarray(A)
-    assert A.ndim == 2
+    assert A.ndim <= 2
+
+    if A.ndim == 0:
+        A = np.array([[A]])
+    elif A.ndim == 1:
+        A = A[np.newaxis,:]
+
     for row in A:
         stream.write('[ %s ]\n' % ''.join(np.take([' ','x'], np.abs(row)>t)))
 
@@ -19,8 +25,8 @@ def spy(A, t=1e-8, stream=None):
 # Class to represent errors in the jacobian
 class ArrayEqualAssertionError(AssertionError):
     def __init__(self, A, B):
-        self.A = A
-        self.B = B
+        self.A = np.asarray(A)
+        self.B = np.asarray(B)
 
     def __str__(self):
         return repr(self)
@@ -38,7 +44,7 @@ class ArrayEqualAssertionError(AssertionError):
             sio.write('Abs difference:\n')
             sio.write(str(abserr)+'\n')
 
-        if self.A.size > 10:
+        if self.A.size > 10 and self.A.ndim <= 2:
             sio.write('A (sparsity pattern):\n')
             spy(self.A, 1e-5, stream=sio)
             sio.write('B (sparsity pattern):\n')
@@ -125,6 +131,9 @@ class NumpyTestCase(unittest.TestCase):
 
 
     def assertArrayEqual(self, A, B):
+        A = np.asarray(A)
+        B = np.asarray(B)
+        self.assertEqual(A.shape, B.shape)
         err = np.sum(np.square(A-B))
         if err > 1e-7:
             raise ArrayEqualAssertionError(A, B)
