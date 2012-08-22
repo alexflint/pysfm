@@ -169,15 +169,15 @@ class Bundle(object):
         self.tracks.append(track)
         return track
 
-    # Get a list of rotation matrices for all cameras
+    # Get a list of all rotation matrices
     def Rs(self):
         return np.array([ cam.R for cam in self.cameras ])
 
-    # Get a list of translation vectors for all cameras
+    # Get a list of all translation vectors
     def ts(self):
         return np.array([ cam.t for cam in self.cameras ])
 
-    # Get a list the 3D point reconstructions for all tracks
+    # Get a list of reconstructed points (one for each track)
     def points(self):
         return np.array([ track.reconstruction for track in self.tracks ])
 
@@ -350,6 +350,11 @@ class Bundle(object):
         ts = [ self.cameras[idx].t for idx in track.camera_ids() ]
         msms = track.measurements.values()
         return triangulate.algebraic_lsq(self.K, Rs, ts, msms)
+
+    # Replace all tracks with their triangulation given current camera poses
+    def triangulate_all(self):
+        for track in self.tracks:
+            track.reconstruction = self.triangulate(track)
 
     # Apply a linear update to all cameras and points
     def perturb(self, delta, param_mask=None):

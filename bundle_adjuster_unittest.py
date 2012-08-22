@@ -31,7 +31,8 @@ class BundleAdjusterTest(numpy_test.NumpyTestCase):
     
         ba = BundleAdjuster(bundle)
         ba.prepare_schur_complement()
-        A,b = ba.compute_schur_complement(damping)
+        ba.apply_damping(damping)
+        A,b = ba.compute_schur_complement()
 
         self.assertArrayEqual(A, Aslow)
         self.assertArrayEqual(b, bslow)
@@ -52,7 +53,7 @@ class BundleAdjusterTest(numpy_test.NumpyTestCase):
 
         # Compute terms again, using wrapper
         ba = BundleAdjuster(bundle)
-        delta = ba.compute_update(bundle, damping)
+        delta = ba.compute_update(damping)
         self.assertArrayEqual(delta, delta_slow)
 
 
