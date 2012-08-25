@@ -79,10 +79,8 @@ class Track(object):
     def __init__(self, camera_ids=[], measurements=[], reconstruction=None):
         assert isinstance(camera_ids, list)
         assert len(camera_ids) == len(measurements)
-        if reconstruction is None:
-            reconstruction = np.zeros(3)
         self.measurements = dict(zip(camera_ids, measurements))
-        self.reconstruction = reconstruction
+        self.reconstruction = reconstruction  # will be None if no reconstruction provided
 
     # Add a measurement to this track for the camera with the given ID
     def add_measurement(self, camera_id, measurement):
@@ -137,8 +135,17 @@ class Bundle(object):
 
     # Check sizes etc
     def check_consistency(self):
-        assert np.shape(self.K) == (3, 3), \
-            'shape was '+str(np.shape(self.K))
+        assert self.sensor_model is not None
+
+        assert np.shape(self.K) == (3, 3), 'shape was '+str(np.shape(self.K))
+
+        for i,track in enumerate(self.tracks):
+            assert track.reconstruction is not None, \
+                'Reconstruction must be initialized at track %d' % i
+
+        for i,camera in enumerate(self.cameras):
+            assert camera.R.shape == (3,3)
+            assert camera.t.shape == (3,)
 
     # Add a new camera. If a camera is provided, initialize it with
     # that value. Otherwise, create a camera with default parameters
@@ -241,7 +248,7 @@ class Bundle(object):
         return np.hstack([ self.residual(i,j) for (i,j) in self.measurement_ids() ])
 
     # Get the total cost of the system
-    def cost(self):
+    def complete_cost(self):
         return np.sum(np.square(self.residuals()))
 
     # Triangulate the position of a track. Returns a 3-vector

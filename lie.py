@@ -1,55 +1,88 @@
 import numpy as np
 import scipy.linalg as la
-import finite_differences
+from numpy_test import NumpyTestCase
 
-G1 = np.array([[ 0., 1., 0. ],
-               [ -1., 0., 0. ],
-               [ 0., 0., 0. ]])
+Gs = np.array([[[ 0.,  0.,  0. ],
+                [ 0.,  0., -1. ],
+                [ 0.,  1.,  0. ]],
 
-G2 = np.array([[ 0., 0., 1. ],
-               [ 0., 0., 0. ],
-               [ -1., 0., 0. ]])
+               [[ 0.,  0.,  1. ],
+                [ 0.,  0.,  0. ],
+                [ -1., 0.,  0. ]],
 
-G3 = np.array([[ 0., 0., 0. ],
-               [ 0., 0., -1. ],
-               [ 0., -1., 0. ]])
+               [[ 0., -1.,  0. ],
+                [ 1.,  0.,  0. ],
+                [ 0.,  0.,  0. ]]])
 
-Gs = [ G1, G2, G3 ]
+def skew(m):
+    m = np.asarray(m)
+    assert m.shape == (3,)
+    return np.array([[  0,    -m[2],  m[1] ],
+                     [  m[2],  0,    -m[0] ],
+                     [ -m[1],  m[0],  0.   ]])
 
 class SO3(object):
+    # Compute the mapping from so(3) to SO(3)
     @classmethod
     def exp(cls, m):
         m = np.asarray(m)
         assert np.shape(m) == (3,)
-        return la.expm(m[0]*G1 + m[1]*G2 + m[2]*G3)
 
-    @classmethod
-    def generator_field(cls, i, x):
-        x = np.asarray(x)
-        assert np.shape(x) == (3,)
-        assert i >= 0 and i < 3
-        return np.dot(Gs[i], x)
+        t = np.linalg.norm(m)
+        if t < 1e-8:
+            return np.eye(3)   # exp(0) = I
 
-    # Compute jacobian of exp(m)*x with respect to m. Jacobian is
-    # always evaluated at the origin.
+        skewm = skew(m)
+        A = np.sin(t)/t
+        B = (1. - np.cos(t)) / (t*t)
+        I = np.eye(3)
+        return I + A * skewm + B * np.dot(skewm, skewm)
+
+    # Compute jacobian of exp(m)*x with respect to m, evaluated at
+    # m=[0,0,0]. x is assumed constant with respect to m.
     @classmethod
     def J_expm_x(cls, x):
+        return skew(-x)
+
+    # Return the generators times x
+    @classmethod
+    def generator_field(cls, x):
+        return skew(x)
+
+    # Compute the exponential of m*Gs, slow way
+    @classmethod
+    def exp_slow(cls, m):
+        m = np.asarray(m)
+        assert np.shape(m) == (3,)
+        return la.expm(m[0]*Gs[0] + m[1]*Gs[1] + m[2]*Gs[2])
+
+    # Compute jacobian of exp(m)*x with respect to m, evaluated at m=[0,0,0], slow way
+    @classmethod
+    def J_expm_x_slow(cls, x):
         J = np.empty((3,3))
         for i in range(3):
             J[:,i] = SO3.generator_field(i, x)
         return J
 
-
-
 ################################################################################
-def f(m, x):
-    return np.dot(SO3.exp(m), x)
+class LieTest(NumpyTestCase):
+    def test_rodrigues(self):
+        m = np.array([1., 3., -1.])
+        R1 = SO3.exp(m)
+        R2 = SO3.exp_slow(m)
+        self.assertArrayEqual(R1, R2)
 
-def run_tests():
-    x0 = np.array([1., 4., -2.])
-    m0 = np.zeros(3)
-    
-    J = SO3.J_expm_x(x0)
-    ff = lambda m: f(m, x0)
+    def test_generator_field(self):
+        m = np.array([1., 3., -1.])
+        self.assertArrayEqual(SO3.generator_field(m),
+                              m[0]*Gs[0] + m[1]*Gs[1] + m[2]*Gs[2])
 
-    finite_differences.check_jacobian(ff, J, m0)
+    def test_jacobian(self):
+        x0 = np.array([1., 4., -2.])
+        J = SO3.J_expm_x(x0)
+        f = lambda m: np.dot(SO3.exp(m), x0)
+        self.assertJacobian(f, J, np.zeros(3))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main()

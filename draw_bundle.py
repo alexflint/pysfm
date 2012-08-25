@@ -16,7 +16,7 @@ def draw_measurements(bundle, i, *args, **kwargs):
     xs = [ t.get_measurement(i) for t in bundle.tracks if t.has_measurement(i) ]
     draw_points(xs, *args, **kwargs)
 
-def draw_views(bundle, inds):
+def draw_views(bundle):
     matlen = ceil(sqrt(len(bundle.cameras)))
     for i in range(len(bundle.cameras)):
         subplot(matlen, matlen, i+1)

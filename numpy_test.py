@@ -104,7 +104,7 @@ class NumpyTestCase(unittest.TestCase):
         self.assertEqual(np.shape(arr), expected_shape)
 
     # Check that the Jacobian of f (computed numerically) equals Jf
-    def assertJacobian(self, f, Jf, x0, tol=1e-5):
+    def assertJacobian(self, f, Jf, x0, tol=1e-5, h=1e-8):
         x0 = np.asarray(x0)
 
         # if Jf is a function then just evaluate it once
@@ -114,7 +114,7 @@ class NumpyTestCase(unittest.TestCase):
             J_analytic = Jf
 
         # Compute numeric jacobian
-        J_numeric = finite_differences.numeric_jacobian(f, x0, 1e-8)
+        J_numeric = finite_differences.numeric_jacobian(f, x0, h)
 
         # Check shape
         self.assertEqual(J_analytic.shape, J_numeric.shape)
