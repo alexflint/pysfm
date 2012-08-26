@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.linalg as la
 from numpy_test import NumpyTestCase
+from algebra import skew
 
 Gs = np.array([[[ 0.,  0.,  0. ],
                 [ 0.,  0., -1. ],
@@ -13,13 +14,6 @@ Gs = np.array([[[ 0.,  0.,  0. ],
                [[ 0., -1.,  0. ],
                 [ 1.,  0.,  0. ],
                 [ 0.,  0.,  0. ]]])
-
-def skew(m):
-    m = np.asarray(m)
-    assert m.shape == (3,)
-    return np.array([[  0,    -m[2],  m[1] ],
-                     [  m[2],  0,    -m[0] ],
-                     [ -m[1],  m[0],  0.   ]])
 
 class SO3(object):
     # Compute the mapping from so(3) to SO(3)

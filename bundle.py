@@ -23,23 +23,31 @@ def project2(K, R0, m, t, x):
     R = dots(R0, lie.SO3.exp(m))
     return project(K, R, t, x)
 
-# Jacobian of project w.r.t. landmark
-def Jproject_x(K, R, t, x):
-    return dots(Jpr(dots(K, R, x) + dots(K, t)), K, R)
-
-# Jacobian of project w.r.t. translation
-def Jproject_t(K, R, t, x):
-    return dots(Jpr(dots(K, R, x) + dots(K, t)), K)
-
 # Jacobian of project w.r.t. rotation
 def Jproject_R(K, R, t, x):
     return np.dot(Jpr(dots(K, R, x) + dots(K, t)),
                   dots(K, R, lie.SO3.J_expm_x(x)))
 
+# Jacobian of project w.r.t. translation
+def Jproject_t(K, R, t, x):
+    return dots(Jpr(dots(K, R, x) + dots(K, t)), K)
+
+# Jacobian of project w.r.t. landmark
+def Jproject_x(K, R, t, x):
+    return dots(Jpr(dots(K, R, x) + dots(K, t)), K, R)
+
 # Jacobian of projection w.r.t. camera params
 def Jproject_cam(K, R, t, x):
     return np.hstack((Jproject_R(K, R, t, x),
                       Jproject_t(K, R, t, x)))
+
+# Combined point/camera jacobians, for efficiency
+def Jproject_all(K, R, t, x):
+    J_p = Jpr(dots(K, R, x) + np.dot(K, t))
+    J_t = np.dot(J_p, K)
+    J_x = np.dot(J_t, R)
+    J_R = dots(J_x, lie.SO3.J_expm_x(x))
+    return (np.hstack(J_R, J_t), J_x)
 
 ############################################################################
 # Represents a pinhole camera with a rotation and translation
@@ -76,11 +84,10 @@ class Camera(object):
 ############################################################################
 # Represents a set of measurements associated with a single 3D point
 class Track(object):
-    def __init__(self, camera_ids=[], measurements=[], reconstruction=None):
+    def __init__(self, camera_ids=[], measurements=[]):
         assert isinstance(camera_ids, list)
         assert len(camera_ids) == len(measurements)
         self.measurements = dict(zip(camera_ids, measurements))
-        self.reconstruction = reconstruction  # will be None if no reconstruction provided
 
     # Add a measurement to this track for the camera with the given ID
     def add_measurement(self, camera_id, measurement):
@@ -101,12 +108,6 @@ class Track(object):
     def intersect_camera_ids(self, camera_ids):
         return self.measurements.viewkeys() & camera_ids  # set intersections
 
-    # Apply a linear update to this object
-    def perturb(self, delta):
-        assert np.shape(delta) == (3,)
-        self.reconstruction += delta
-        return self
-
     def __str__(self):
         return repr(self)
 
@@ -124,6 +125,7 @@ class Bundle(object):
     def __init__(self, ncameras=0, ntracks=0):
         self.cameras = []
         self.tracks = []
+        self.reconstruction = np.zeros((ntracks, 3))
         self.K = np.eye(3)
         self.sensor_model = sensor_model.GaussianModel(1.)
 
@@ -136,12 +138,17 @@ class Bundle(object):
     # Check sizes etc
     def check_consistency(self):
         assert self.sensor_model is not None
-
         assert np.shape(self.K) == (3, 3), 'shape was '+str(np.shape(self.K))
+        assert np.shape(self.reconstruction) == (len(self.tracks), 3)
+        assert np.sum(np.square(self.reconstruction)) > 1e-8, 'reconstruction must be initialized'
 
         for i,track in enumerate(self.tracks):
-            assert track.reconstruction is not None, \
-                'Reconstruction must be initialized at track %d' % i
+            assert np.min(list(track.camera_ids())) >= 0, \
+                'There are %d cameras but track has a measurements for %s' % \
+                (len(self.cameras), str(track.camera_ids()))
+            assert np.max(list(track.camera_ids())) < len(self.cameras), \
+                'There are %d cameras but track has a measurements for %s' % \
+                (len(self.cameras), str(track.camera_ids()))
 
         for i,camera in enumerate(self.cameras):
             assert camera.R.shape == (3,3)
@@ -184,7 +191,7 @@ class Bundle(object):
 
     # Get a list of reconstructed points (one for each track)
     def points(self):
-        return np.array([ track.reconstruction for track in self.tracks ])
+        return self.reconstruction
 
     # Get the measurement of the j-th track in the i-th camera
     def measurement(self, i, j):
@@ -213,7 +220,7 @@ class Bundle(object):
 
     # Get the prediction for the j-th track in the i-th camera
     def predict(self, i, j):
-        return project(self.K, self.cameras[i].R, self.cameras[i].t, self.tracks[j].reconstruction)
+        return project(self.K, self.cameras[i].R, self.cameras[i].t, self.reconstruction[j])
 
     # Get the element-wise difference between a measurement and its prediction
     def reproj_error(self, i, j):
@@ -227,11 +234,26 @@ class Bundle(object):
     def Jresidual(self, i, j):
         R = self.cameras[i].R
         t = self.cameras[i].t
-        x = self.tracks[j].reconstruction
-        Jcost_r = self.sensor_model.Jresidual_from_error(self.reproj_error(i, j))
-        Jr_cam = dots(Jcost_r, Jproject_cam(self.K, R, t, x))
-        Jr_x = dots(Jcost_r, Jproject_x(self.K, R, t, x))
-        return Jr_cam, Jr_x
+        x = self.reconstruction[j]
+
+        prediction = np.dot(self.K, np.dot(R, x) + t)
+        
+        Jpre_p = Jpr(prediction)                     # Jacobian of prediction with respect to p
+        Jpre_t = np.dot(Jpre_p, self.K)              # Jacobian of prediction with respect to t
+        Jpre_x = np.dot(Jpre_t, R)                   # Jacobian of prediction with respect to x
+        Jpre_R = dots(Jpre_x, lie.SO3.J_expm_x(x))   # Jacobian of prediction with respect to R
+        Jpre = np.hstack((Jpre_R, Jpre_t, Jpre_x))   # Jacobian of prediction with respect to all above
+        
+        # Compute jacobian of residual with respect to prediction
+        reproj_err = pr(prediction) - self.measurement(i,j)
+        Jr_pre = self.sensor_model.Jresidual_from_error(reproj_err)
+
+        # Chain rule: compute jacobian of residual with respect to camera and point
+        Jr = np.dot(Jr_pre, Jpre)
+
+        #Jr_cam = dots(Jcost_r, Jproject_cam(self.K, R, t, x))
+        #Jr_x = dots(Jcost_r, Jproject_x(self.K, R, t, x))
+        return Jr[:,:6], Jr[:,6:]
 
     # Get an array containing predictions for each (camera, point) pair
     def predictions(self):
@@ -251,6 +273,21 @@ class Bundle(object):
     def complete_cost(self):
         return np.sum(np.square(self.residuals()))
 
+    # Create a copy of this bundle by duplicating all cameras and
+    # reconstructed points. Do *not* duplicate the tracks (for
+    # efficiency reasons). If you want a "real" clone of this object
+    # then use deepcopy()
+    def clone_params(self):
+        b = Bundle()
+        # Deep-copy the cameras and reconstructions
+        b.K = self.K.copy()
+        b.cameras = [ Camera(c.R.copy(), c.t.copy()) for c in self.cameras ]
+        b.reconstruction = self.reconstruction.copy()
+        # Shallow-copy the rest
+        b.tracks = self.tracks
+        b.sensor_model = self.sensor_model
+        return b
+
     # Triangulate the position of a track. Returns a 3-vector
     def triangulate(self, track):
         Rs = [ self.cameras[idx].R for idx in track.camera_ids() ]
@@ -260,15 +297,16 @@ class Bundle(object):
 
     # Replace all tracks with their triangulation given current camera poses
     def triangulate_all(self):
-        for track in self.tracks:
-            track.reconstruction = self.triangulate(track)
+        self.reconstruction = np.array([ self.triangulate(track) for track in self.tracks ])
 
     # Create a bundle from matrices of observations. For N cameras and M tracks:
     #  - K should 3 x 3
     #  - Rs should be N x 3 x 3
     #  - ts should be N x 3
     #  - measurements should be N x M x 2
-    #  - measurement_mask should be N x M and of type bool
+    #  - measurement_mask should be N x M and of type bool. The False
+    #    elements are interpreted as missing data (i.e. tracks not
+    #    observed by a particular camera)
     # every False element of measurement_mask corresponds to a missing measurement
     @classmethod
     def FromArrays(cls, K, Rs, ts, pts, measurements, measurement_mask=None):
@@ -290,14 +328,14 @@ class Bundle(object):
 
         # Create the bundle
         b = Bundle()
-        b.K = K
+        b.K = K.copy()
+        b.reconstruction = np.asarray(pts).copy()
         for R,t in zip(Rs,ts):
             b.add_camera(Camera(R,t))
         for i in range(measurements.shape[1]):
             camera_ids = list(np.nonzero(measurement_mask[:,i])[0])
             msms = measurements[ camera_ids, i ]
-            t = b.add_track(Track(camera_ids, msms))
-            t.reconstruction = pts[i]
+            b.add_track(Track(camera_ids, msms))
             
         # Return the bundle
         return b
@@ -332,8 +370,9 @@ class Bundle(object):
             cam.perturb( delta[ i*Bundle.NumCamParams : (i+1)*Bundle.NumCamParams ] )
 
         offs = len(self.cameras) * Bundle.NumCamParams
-        for i,track in enumerate(self.tracks):
-            track.perturb( delta[ offs+i*Bundle.NumPointParams : offs+(i+1)*Bundle.NumPointParams ] )
+        for i in range(len(self.tracks)):
+            pos = offs+i*Bundle.NumPointParams
+            self.reconstruction[i] += delta[ pos : pos+Bundle.NumPointParams ]
 
         return self
 

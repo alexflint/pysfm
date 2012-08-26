@@ -47,3 +47,11 @@ def dots(*m):
 def ssq(x):
     return np.dot(x,x)
 
+# Compute the skew-symmetric matrix for m
+def skew(m):
+    m = np.asarray(m)
+    assert m.shape == (3,)
+    return np.array([[  0,    -m[2],  m[1] ],
+                     [  m[2],  0,    -m[0] ],
+                     [ -m[1],  m[0],  0.   ]])
+

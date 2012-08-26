@@ -24,7 +24,7 @@ class SlidingWindowSLAM(object):
 
 
 def run(complete_bundle, window_size, num_to_freeze=2, pdf_pattern=None):
-    NUM_TRACKS = 10
+    NUM_TRACKS = 100
 
     # Determine the projection so that we always draw the bundle on a fixed subspace
     visualization_subspace = compute_subspace(complete_bundle)
@@ -59,6 +59,7 @@ def run(complete_bundle, window_size, num_to_freeze=2, pdf_pattern=None):
             draw_bundle(ba.bundle, visualization_subspace, pose_colors)
             plt.savefig(pdf_path)
 
+        break
 
 if __name__ == '__main__':
     np.seterr(all='raise')

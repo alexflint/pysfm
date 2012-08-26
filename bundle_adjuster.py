@@ -127,7 +127,7 @@ class BundleAdjuster:
                     continue
 
                 # Apply update
-                bnext = deepcopy(self.bundle)
+                bnext = self.bundle.clone_params()
                 self.update_motion(motion_update, bnext)
                 self.update_structure(structure_update, bnext)
                 next_cost = self.compute_cost(bnext)
@@ -310,5 +310,5 @@ class BundleAdjuster:
     def update_structure(self, delta, bundle):
         assert shape(delta) == (len(self.optim_track_ids), 3)
         for pos,idx in enumerate(self.optim_track_ids):
-            bundle.tracks[idx].perturb(delta[pos])
+            bundle.reconstruction[idx] += delta[pos]
 
