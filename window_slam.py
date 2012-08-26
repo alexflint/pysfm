@@ -8,10 +8,10 @@ import bundle_io
 import sequence
 
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('PDF')
 import matplotlib.pyplot as plt
 
-from draw_bundle_3d import draw_bundle
+from draw_bundle_pca import draw_bundle, compute_subspace
 
 class SlidingWindowSLAM(object):
     def __init__(self, window_size):
@@ -24,16 +24,19 @@ class SlidingWindowSLAM(object):
 
 
 def run(complete_bundle, window_size, num_to_freeze=2, pdf_pattern=None):
+    NUM_TRACKS = 10
+
+    # Determine the projection so that we always draw the bundle on a fixed subspace
+    visualization_subspace = compute_subspace(complete_bundle)
     
     # Create binary mask for frozen cameras
     camera_mask = arange(window_size) < num_to_freeze
 
-    num_tracks = 100
-    track_ids = range(num_tracks)
+    track_ids = range(NUM_TRACKS)
     
     # Start optimizing
-    cur_bundle = complete_bundle    
-    for i in range(0, len(complete_bundle.cameras)-window_size):
+    cur_bundle = complete_bundle
+    for i in range(0, len(complete_bundle.cameras)-window_size+1):
         print '\n\n==============\nWINDOW: [%d..%d]\n' % (i, i+window_size)
 
         # Adjust this window
@@ -41,13 +44,19 @@ def run(complete_bundle, window_size, num_to_freeze=2, pdf_pattern=None):
         ba = BundleAdjuster()
         ba.set_bundle(cur_bundle, camera_ids=camera_ids, track_ids=track_ids)
         ba.optimize()
-        
-        # Save the window
         cur_bundle = ba.bundle
+        
+        # Draw this window
+        print 'Drawing bundle...'
         if pdf_pattern is not None:
+            pose_colors = ['b'] * len(ba.bundle.cameras)
+            for j in range(i):
+                pose_colors[j] = 'g'
+            for j in range(i,i+window_size):
+                pose_colors[j] = 'r'
             pdf_path = pdf_pattern % i
             print 'Writing to ',pdf_path
-            draw_bundle(cur_bundle)
+            draw_bundle(ba.bundle, visualization_subspace, pose_colors)
             plt.savefig(pdf_path)
 
 
@@ -59,12 +68,14 @@ if __name__ == '__main__':
     else:
         pdf_pattern = None
 
-    bundle = bundle_io.load(sys.argv[1], sys.argv[2])
-    bundle.triangulate_all()
+    window_size = int(sys.argv[3])
 
-    print pdf_pattern
+    print 'Loading bundle...'
+    bundle = bundle_io.load(sys.argv[1], sys.argv[2])
+    print 'Triangulating initial points...'
+    bundle.triangulate_all()
 
     print 'Cameras:',len(bundle.cameras)
     print 'Tracks:',len(bundle.tracks)
-    run(bundle, int(sys.argv[3]), pdf_pattern=pdf_pattern)
-
+    print 'Window Size:',window_size
+    run(bundle, window_size, pdf_pattern=pdf_pattern)

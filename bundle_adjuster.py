@@ -101,7 +101,11 @@ class BundleAdjuster:
         print 'Configured a bundle adjuster for %d cameras, %d tracks' % (nc, nt)
 
     # Optimize the current bundle to convergence
-    def optimize(self, param_mask=None, max_steps=25, init_damping=100.):
+    def optimize(self,
+                 param_mask=None,
+                 max_steps=25,
+                 init_damping=10.,
+                 improvement_threshold=1e-4):
         # Begin optimizing
         damping = init_damping
         self.num_steps = 0
@@ -112,7 +116,7 @@ class BundleAdjuster:
             cur_cost = self.compute_cost(self.bundle)
             print 'Step %d: cost=%f, damping=%f' % (self.num_steps, cur_cost, damping)
 
-            while not self.converged:
+            while not self.converged and damping < 1e+8:
                 # Compute update
                 try:
                     motion_update,structure_update = self.compute_update(damping, param_mask)
@@ -133,7 +137,7 @@ class BundleAdjuster:
                     damping *= .1
                     self.bundle = bnext
                     self.costs.append(next_cost)
-                    self.converged = abs(cur_cost - next_cost) < 1e-8
+                    self.converged = abs(cur_cost - next_cost) < improvement_threshold
                     break
                 else:
                     damping *= 10.
