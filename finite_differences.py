@@ -15,9 +15,16 @@ def numeric_derivative(f, x0, h=1e-8):
 
 def numeric_jacobian(f, x0, h=1e-8):
     f0 = f(x0)
-    J_numeric = np.empty((len(f0), len(x0)))
+
+    assert np.ndim(x0) <= 1
+    assert np.ndim(f0) <= 1
+    xlen = x0.size
+    flen = f0.size
+
+    J_numeric = np.empty((flen, xlen))
+
     for i in range(len(x0)):
-        f_partial = lambda delta: f(x0 + axis(i, len(x0))*delta)
+        f_partial = lambda delta: f(x0 + axis(i, xlen)*delta)
         J_numeric[:,i] = numeric_derivative(f_partial, 0., h)
     return J_numeric
 

@@ -20,7 +20,7 @@ class SO3(object):
     @classmethod
     def exp(cls, m):
         m = np.asarray(m)
-        assert np.shape(m) == (3,)
+        assert np.shape(m) == (3,), 'shape was '+str(np.shape(m))
 
         t = np.linalg.norm(m)
         if t < 1e-8:
