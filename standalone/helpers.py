@@ -4,12 +4,31 @@ from numpy.linalg import *
 CAUCHY_SIGMA = .1           # determines the steepness of the Cauchy robustifier near zero
 CAUCHY_SIGMA_SQR = CAUCHY_SIGMA * CAUCHY_SIGMA
 
-# Convenience for matrix multiplication
-def dots3(A, B, C):
-    return dot(A, dot(B, C))
+# Multiply a list of matrices
+def dots(*m):
+    return reduce(dot, m)
 
-def dots4(A, B, C, D):
-    return dot(A, dot(B, dot(C,D)))
+# Divide the first n-1 elements in x by the last. If x is an array
+# then do this row-wise.
+def pr(x):
+    x = asarray(x)
+    if x.ndim == 1:
+        return x[:-1] / x[-1]
+    elif x.ndim == 2:
+        return x[:,:-1] / x[:,[-1]]
+    else:
+        raise Exception, 'Cannot pr() an array with %d dimensions' % x.ndim
+
+# Append the number 1 to x. If x is an array then do this row-wise.
+def unpr(x):
+    x = asarray(x)
+    if x.ndim == 1:
+        return hstack((x, 1.))
+    elif x.ndim == 2:
+        return hstack((x, ones((len(x), 1))))
+    else:
+        raise Exception, 'Cannot unpr() an array with %d dimensions' % x.ndim
+
 
 #
 # SO(3) stuff
@@ -43,6 +62,15 @@ def SO3_exp(m):
 #
 # Robustifiers
 #
+
+# Given a scalar residual, compute the Cauchy-robustified error response.
+def cauchy_cost_from_residual(r):
+    return log(1. + r*r / CAUCHY_SIGMA_SQR)
+
+# Given a scalar residual, compute the derivative of the
+# Cauchy-robustified error response.
+def Jcauchy_cost_from_residual(r):
+    return 2*r / (CAUCHY_SIGMA_SQR + r*r)
 
 # Given a 2x1 reprojection error (in raw pixel coordinates), evaluate
 # a robust error function and return a scalar cost.
@@ -86,3 +114,30 @@ def triangulate_algebraic_lsq(K, Rs, ts, msms):
 
     x, residuals, rank, sv = lstsq(A, b)
     return x
+
+
+#
+# Geometry
+#
+
+
+# Get a relative pose (R01,t01) that goes from the pose (R0,t0) to (R1,t1)
+def relative_pose(R0, t0, R1, t1):
+    R_delta = dot(R1, R0.T)
+    t_delta = t1 - dots(R1, R0.T, t0)
+    return R_delta, t_delta
+
+def rotation_xy(th):
+    return array([[ cos(th), -sin(th),  0. ],
+                  [ sin(th),  cos(th),  0. ],
+                  [ 0.,       0.,       1. ]])
+
+def rotation_xz(th):
+    return array([[ cos(th),  0.,  -sin(th)  ],
+                  [ 0.,       1.,   0.       ],
+                  [ sin(th),  0.,   cos(th), ]])
+
+def rotation_yz(th):
+    return array([[ 1.,  0.     ,  0.      ],
+                  [ 0.,  cos(th), -sin(th) ],
+                  [ 0.,  sin(th),  cos(th) ]])
