@@ -107,7 +107,7 @@ def optimize_point(measurements, Rs, ts, x_init):
             # Apply Levenberg-Marquardt damping
             A = JTJ.copy()
             for i in range(3):
-                A[i] *= (1. + damping)
+                A[i,i] *= (1. + damping)
     
             # Solve normal equations: 3x3
             try:

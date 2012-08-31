@@ -108,7 +108,7 @@ def optimize_pose(points, measurements, R_init, t_init):
             JTr += dot(Ji.T, ri)    # 6x2 * 2x1
 
         # Pick a step length
-        while not converged:
+        while damping < 1e+8 and not converged:
             # Apply Levenberg-Marquardt damping
             A = JTJ.copy()
             for i in range(6):
@@ -139,9 +139,6 @@ def optimize_pose(points, measurements, R_init, t_init):
             else:
                 # Cost increased: reject the udpate, try another step length
                 damping *= 10.
-                if damping > 1e+8:
-                    print 'FAILED TO CONVERGE'
-                    break
 
     return R_cur, t_cur
 

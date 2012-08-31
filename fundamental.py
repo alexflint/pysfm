@@ -7,6 +7,13 @@ from lie import SO3
 from geometry import *
 from algebra import *
 
+SENSOR_NOISE = 0
+
+MAX_STEPS = 50
+CONVERGENCE_THRESH = 1e-5   # convergence detected when improvement less than this
+         
+INIT_DAMPING = .1
+
 # Compute the fundamental matrix K^-T * R * skew(x) * K^-1
 def fund(K, R, t):
     return dots(inv(K).T, skew(t), R, inv(K))
@@ -145,6 +152,12 @@ def Jresidual(K, R, t, x0, x1):
     J = Jf/sqrt(d) - f*Jd / (d * sqrt(d))
     return J
 
+def cost(K, R, t, xs0, xs1):
+    c = 0.
+    for x0,x1 in zip(xs0,xs1):
+        c += square(residual(K, R, zeros(3), t, x0, x1))
+    return c
+
 
 K = eye(3)
 
@@ -166,10 +179,103 @@ pts = random.randn(10,3) + array([0., 0., -5.])
 xs0 = array([ dot(K, dot(R0, x) + t0) for x in pts ])
 xs1 = array([ dot(K, dot(R1, x) + t1) for x in pts ])
 
+xs0 += random.randn(*xs0.shape) * SENSOR_NOISE
+xs1 += random.randn(*xs1.shape) * SENSOR_NOISE
+
 x0 = xs0[0] + (.5,   0.,  1.)
 x1 = xs1[0] + (-1., .8,   1.)
 
 
+################################################################################
+def optimize_fmatrix(xs0, xs1, R_init, t_init):
+    num_steps = 0
+    R_cur = R_init.copy()
+    t_cur = t_init.copy()
+    cost_cur = cost(K, R_cur, t_cur, xs0, xs1)
+    converged = False
+    damping = INIT_DAMPING
+    while num_steps < MAX_STEPS and damping < 1e+8 and not converged:
+        print 'Step %d: cost=%f' % (num_steps, cost_cur)
+
+        # Pick a parameter to freeze
+        # TODO: do this the proper way instead
+        freeze = 3 + argmax(t_cur)
+        mask = arange(6) != freeze
+
+        # Compute J^T * J and J^T * r
+        JTJ = zeros((5,5))  # 6x6
+        JTr = zeros(5)      # 6x1
+        for x0,x1 in zip(xs0,xs1):
+            # Jacobian for the i-th point:
+            ri = residual(K, R_cur, zeros(3), t_cur, x0, x1)
+            Ji = Jresidual(K, R_cur, t_cur, x0, x1)[ mask ]
+            # Add to full jacobian
+            JTJ += dot(Ji.T, Ji)    # 6x2 * 2x6 -> 6x6
+            JTr += dot(Ji.T, ri)    # 6x2 * 2x1 -> 6x1
+
+        # Pick a step length
+        while damping < 1e+8 and not converged:
+            # Check for failure
+            if damping > 1e+8:
+                print 'FAILED TO CONVERGE'
+                break
+
+            # Apply Levenberg-Marquardt damping
+            A = JTJ.copy()
+            for i in range(A.shape[0]):
+                A[i,i] *= (1. + damping)
+    
+            # Solve normal equations: 5x5
+            try:
+                update = -solve(A, JTr)
+            except LinAlgError:
+                # Badly conditioned: increase damping and try again
+                damping *= 10.
+                continue
+
+            # Take gradient step
+            R_next = dot(R_cur, SO3.exp(update[:3]))
+            t_next = t_cur.copy()
+            t_next[mask[3:]] = t_cur[mask[3:]] + update[3:]
+
+            # Compute new cost
+            cost_next = cost(K, R_next, t_next, xs0, xs1)
+            print '  cur cost',cost_cur
+            print '  next cost',cost_next
+            if cost_next < cost_cur:
+                # Cost decreased: accept the update
+                if cost_cur - cost_next < CONVERGENCE_THRESH or damping < 1e-8:
+                    converged = True
+
+                R_cur = R_next
+                t_cur = t_next
+                cost_cur = cost_next
+                damping *= .1
+                num_steps += 1
+                break
+
+            else:
+                # Cost increased: reject the udpate, try another step length
+                damping *= 10.
+                print '  Update rejected... increasing damping to '+str(damping)
+
+    return R_cur, t_cur
+
+
+
+def test_optimize():
+    random.seed(73)
+    R_init = dot(R, SO3.exp(random.randn(3)*.1))
+    t_init = t + random.randn(3)*.1
+    R_opt, t_opt = optimize_fmatrix(xs0, xs1, R_init, t_init)
+    print 'True:'
+    print np.hstack((R, t[:,newaxis]))
+    print 'Initial:'
+    print np.hstack((R_init, t_init[:,newaxis]))
+    print 'Final:'
+    print np.hstack((R_opt, t_opt[:,newaxis]))
+
+################################################################################
 class FundmentalMatrixTest(NumpyTestCase):
     def setUp(self):
         pass
@@ -206,14 +312,15 @@ class FundmentalMatrixTest(NumpyTestCase):
 
     def test_Jresidual(self):
         fR = lambda m: residual(K, R, m, t, x0, x1)
-        #f = lambda v: residual(K, R, v[:3], v[3:], x0, x1)
+        f = lambda v: residual(K, R, v[:3], v[3:], x0, x1)
         self.assertJacobian(fR, Jresidual(K, R, t, x0, x1)[newaxis,:3], zeros(3))
-        #self.assertJacobian( f, Jresidual(K, R, t, x0, x1)[newaxis,:], concatenate((zeros(3),t)) )
+        self.assertJacobian( f, Jresidual(K, R, t, x0, x1)[newaxis,:], concatenate((zeros(3),t)) )
 
 
 if __name__ == '__main__':
+    test_optimize()
+
     import unittest
     np.seterr(all='raise')
     unittest.main()
 
-    test_optimize()
