@@ -4,6 +4,7 @@ import StringIO
 
 import finite_differences
 
+############################################################################
 def spy(A, t=1e-8, stream=None):
     if stream is None:
         import sys
@@ -99,6 +100,7 @@ class JacobianAssertionError(AssertionError):
 
 ############################################################################
 # Helpers for numpy testing
+
 class NumpyTestCase(unittest.TestCase):
     def assertShape(self, arr, expected_shape):
         self.assertEqual(np.shape(arr), expected_shape)

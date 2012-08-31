@@ -1,39 +1,73 @@
+from numpy import *
 import numpy as np
 
 import numpy_test
 
+################################################################################
 def axis(i, ndim):
-    x = np.zeros(ndim)
+    x = zeros(ndim)
     x[i] = 1.
     return x
 
+################################################################################
 def numeric_derivative(f, x0, h=1e-8):
-    assert np.isscalar(x0), 'numeric_derivative can only deal with one-dimensional inputs'
-    fa = f(x0 - h)
-    fb = f(x0 + h)
-    return (fb - fa) / (2. * h)
+    assert isscalar(x0), 'numeric_derivative can only deal with scalar inputs'
+    return (f(x0 + h) - f(x0 - h)) / (2. * h)
 
+################################################################################
 def numeric_jacobian(f, x0, h=1e-8):
-    f0 = f(x0)
+    x0 = atleast_1d(x0)
+    f0 = atleast_1d(f(x0))
 
-    assert np.ndim(x0) <= 1
-    assert np.ndim(f0) <= 1
+    assert ndim(x0) <= 1
+    assert ndim(f0) <= 1
     xlen = x0.size
     flen = f0.size
 
-    J_numeric = np.empty((flen, xlen))
+    J = empty((flen, xlen))
+    for i in range(xlen):
+        ei = h * axis(i,xlen)
+        J[:,i] = (f(x0+ei) - f(x0-ei)) / (2. * h)
 
-    for i in range(len(x0)):
-        f_partial = lambda delta: f(x0 + axis(i, xlen)*delta)
-        J_numeric[:,i] = numeric_derivative(f_partial, 0., h)
-    return J_numeric
+    return J
 
+################################################################################
+def numeric_hessian(f, x0, h=1e-6):
+    x0 = atleast_1d(asarray(x0, float128))
+    f0 = atleast_1d(asarray(f(x0), float128))
+
+    assert ndim(x0) <= 1
+    assert ndim(f0) <= 1
+    xlen = x0.size
+    flen = f0.size
+
+    H = empty((flen, xlen, xlen), float128)
+    for i in range(xlen):
+        ei = h * axis(i,xlen)
+
+        # Compute on-diagonal terms
+        H[:,i,i] = ( f(x0 + ei) - 2.*f0 + f(x0 - ei) )
+        H[:,i,i] /= h*h
+        
+        # Comptue off-diagonal terms
+        for j in range(i):
+            ej = h * axis(j, xlen)
+            A = asarray(f(x0+ei+ej), float128)
+            B = asarray(f(x0+ei-ej), float128)
+            C = asarray(f(x0-ei+ej), float128)
+            D = asarray(f(x0-ei-ej), float128)
+            H[:,i,j] = (A + D - B - C) / (4.*h*h)
+            H[:,j,i] = H[:,i,j]
+
+    return H
+
+################################################################################
 def check_jacobian(f, Jf, x0):
     # if Jf is a function then just evaluate it once
     if callable(Jf):
         Jf = Jf(x0)
 
-    x0 = np.asarray(x0)
+    x0 = asarray(x0)
     Jf_numeric = numeric_jacobian(f, x0, 1e-8)
 
     if Jf.shape != Jf_numeric.shape:
@@ -68,7 +102,7 @@ def check_jacobian(f, Jf, x0):
 
         print 'Max error in Jacobian:'
         print abserr
-        i = np.unravel_index(np.argmax(Jf_abserr), Jf_abserr.shape)
+        i = unravel_index(argmax(Jf_abserr), Jf_abserr.shape)
         print '  (%f vs %f at %d,%d)' % (Jf[i], Jf_numeric[i], i[0], i[1])
         print 'JACOBIAN IS WRONG'
 

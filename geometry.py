@@ -26,11 +26,16 @@ def propagate_pose_update_inplace(cam0, cam0_updated, cam1):
 
 
 def rotation_xy(th):
-    return np.array([[ np.cos(th), -np.sin(th), 0 ],
-                     [ np.sin(th), np.cos(th),  0 ],
-                     [ 0,          0,           1 ]])
+    return np.array([[ np.cos(th), -np.sin(th),  0. ],
+                     [ np.sin(th),  np.cos(th),  0. ],
+                     [ 0.,          0.,          1. ]])
 
 def rotation_xz(th):
-    return np.array([[ np.cos(th),  0,  -np.sin(th) ],
-                     [ 0,           1,  0           ],
-                     [ np.sin(th),  0,  np.cos(th), ]])
+    return np.array([[ np.cos(th),  0.,  -np.sin(th)  ],
+                     [ 0.,          1.,   0.          ],
+                     [ np.sin(th),  0.,   np.cos(th), ]])
+
+def rotation_yz(th):
+    return np.array([[ 1.,  0.        ,  0.         ],
+                     [ 0.,  np.cos(th), -np.sin(th) ],
+                     [ 0.,  np.sin(th),  np.cos(th) ]])
