@@ -1,4 +1,5 @@
 from numpy import *
+from numpy.linalg import *
 import numpy as np
 
 import numpy_test
@@ -107,3 +108,45 @@ def check_jacobian(f, Jf, x0):
         print 'JACOBIAN IS WRONG'
 
     return abserr, Jf_abserr
+
+################################################################################
+# Check the validity of an update vector found during gradient
+# descent. The minimum requirements are that it should have a positive
+# dot product with the gradient: if this is violated, the descent
+# direction is doomed. Unfortunately, a random vector will also pass
+# this test with 50% probability, so we do additional heuristic tests.
+def check_descent_direction(update, f, x0, h=1e-8):
+    f0 = squeeze(f(x0))
+    assert ndim(f0) == 0, 'function must return a scalar'
+
+    # check that the update has the right shape
+    assert shape(update) == shape(x0), 'update had shape %s' % shape(update)
+
+    # compute direction of steepest descent at x0
+    # note that this is the *negative* gradient
+    steepest_descent = -squeeze(numeric_jacobian(f, x0, h))
+    assert ndim(steepest_descent) == 1
+
+    # update *must* have a positive dot product with g
+    dp = dot(steepest_descent,update) / (norm(steepest_descent)*norm(update))
+    assert dp > 0, \
+        '''update was not a descent direction (update * gradient = %f)
+gradient=%s\nupdate=%s''' % (dp, str(steepest_descent), str(update))
+
+    # An angle greater than 45 degrees probably indicates something went wrong
+    if dp < sqrt(.5):
+        theta = rad2deg(arccos(dp))
+        print '  Warning: update was far from the descent direction (dp=%f, theta=%f)' % (dp,theta)
+
+    # Compute the gradient in the direction of steepest descent
+    g_steepest = (f(x0 + steepest_descent*h) - f0) / h
+    assert g_steepest < 1e-8, \
+        'A small step in the direction of steepest descent increases the cost. (delta cost=%f)' \
+        % g_steepest
+
+    # Compute the gradient in the direction of update
+    g_update = (f(x0 + update*h) - f0) / h
+    if g_update > 1e-8:
+        print '  Warning: epsilon*update increases the cost. (delta cost=%f)' % g_update
+        
+    

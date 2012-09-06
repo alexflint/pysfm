@@ -142,9 +142,9 @@ class NumpyTestCase(unittest.TestCase):
 
         # if Jf is a function then just evaluate it once
         if callable(Jf):
-            J_analytic = Jf(x0)
+            J_analytic = atleast_2d(Jf(x0))
         else:
-            J_analytic = Jf
+            J_analytic = atleast_2d(Jf)
 
         # Compute numeric jacobian
         J_numeric = finite_differences.numeric_jacobian(f, x0, h)
