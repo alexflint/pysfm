@@ -28,6 +28,18 @@ def integrate2d(f, lower, upper):
     return y
 
 ################################################################################
+# Compute the logarithm of the determinant of a symmetric positive
+# definite matrix in a numerically stable way
+def log_det_covariance(cov):
+    return 2. * np.sum(log(diag(cholesky(cov))))
+
+################################################################################
+# Compute the logarithm of the determinant of the inverse of a
+# information matrix. (Actually is applicable to any symmetric positive definite matrix)
+def log_det_inv_infomat(L):
+    return 2. * np.sum(log(diag(inv(cholesky(L)))))
+
+################################################################################
 # Evaluate the normal distribution at x
 def evaluate_normal(x, mean, cov):
     x = asarray(x)
@@ -45,8 +57,11 @@ def evaluate_normal(x, mean, cov):
     if expterm < LOG_MIN_REPRESENTABLE_FLOAT:
         return 0.  # Cannot do better than this unfortunately
 
-    denom = (2. * pi) ** (k/2.) * sqrt(det(cov))
-    return exp(expterm) / denom
+    #denom = (2. * pi) ** (k/2.) * sqrt(det(cov))
+    #return exp(expterm) / denom
+
+    log_denom = .5*k*log(2. * pi) + .5*log_det_covariance(cov)
+    return exp(expterm - log_denom)
 
 ################################################################################
 # Evaluate the inverse normal distribution at x
@@ -68,8 +83,13 @@ def evaluate_invnormal(x, v, L):
     if expterm < LOG_MIN_REPRESENTABLE_FLOAT:
         return 0.  # Cannot do better than this unfortunately
 
-    denom = (2. * pi) ** (k/2.) * sqrt(det(inv(L)))
-    return exp(expterm) / denom
+    #denom = (2. * pi) ** (k/2.) * sqrt(det(inv(L)))
+    #return exp(expterm) / denom
+
+    log_denom = .5*k*log(2. * pi) + .5*log_det_inv_infomat(L)
+    return exp(expterm - log_denom)
+    
+
 
 ################################################################################
 # Sample from the normal distrubtion
@@ -129,12 +149,10 @@ def marginalize_invnormal(v, L, params_to_keep):
     return marg_v, marg_L
 
 
-
 ################################################################################
 # Convert from normal to inverse normal parametrisation
 def normal_to_invnormal(mean, cov):
     return dot(inv(cov), mean), inv(cov)
-
 
 ################################################################################
 # Convert from inverse normal to normal parametrisation
@@ -274,6 +292,15 @@ class BeliefTest(NumpyTestCase):
         x0 = array([ 2., 0. ])
         self.assertJacobian(self.predict, self.Jpredict, x0)
 
+    def test_logdet(self):
+        mean, cov = make_gaussian(10)
+        self.assertAlmostEqual(log(det(cov)),
+                               log_det_covariance(cov))
+
+        v,L = normal_to_invnormal(mean, cov)
+        self.assertAlmostEqual(log(det(inv(L))),
+                               log_det_inv_infomat(L))
+
     def test_normal_distributions(self):
         x = array([1., 3.5])
 
@@ -335,6 +362,113 @@ class BeliefTest(NumpyTestCase):
         self.assertArrayEqual(marg_mean, marg_mean2)
         self.assertArrayEqual(marg_cov, marg_cov2)
 
+    def test_reparam_manual(self):
+        x0 = array([ 5., -4. ])
+        A = arange(6).reshape((3,2))
+        prediction = np.dot(A, x0)
+        b = np.zeros(3)
+        sensor_cov = eye(3)
+
+        measurement1 = prediction + array([.2,  -1.,  .45])
+        measurement2 = prediction + array([.2,  -1.5, .45])
+        measurement3 = prediction + array([.25, -1.,   0.])
+
+        z_mean = prediction
+        z_cov = sensor_cov
+        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
+        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
+        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
+
+        # alt param
+        L = dots(A.T, inv(sensor_cov), A)
+        Px1 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement1)), L)
+        Px2 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement2)), L)
+        Px3 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement3)), L)
+
+        print Px1/Pz1
+        print Px2/Pz2
+        print Px3/Pz3
+
+        #self.assertAlmostEqual(Pmsm, Pmsm2)
+
+    def test_reparam_square(self):
+        x0 = array([ 6., -4. ])
+        A = arange(4).reshape((2,2))
+        prediction = np.dot(A, x0)
+        measurement1 = prediction  + array([ .2,  .45 ])
+        measurement2 = prediction + array([ .2,   0. ])
+        measurement3 = prediction + array([ .1, -.25 ])
+        b = np.zeros(2)
+        sensor_cov = 2.*ones((2,2)) + eye(2)*3
+
+        z_mean = prediction
+        z_cov = sensor_cov
+        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
+        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
+        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
+
+        # alt param
+        #x_mean = 
+        #x_cov = inv(dots(A.T, inv(sensor_cov), A))
+        #Px1 = evaluate_normal(x0, solve(A, measurement1), x_cov)
+        #Px2 = evaluate_normal(x0, solve(A, measurement2), x_cov)
+        #Px3 = evaluate_normal(x0, solve(A, measurement3), x_cov)
+
+        L = dots(A.T, inv(sensor_cov), A)
+        PPx1 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement1)), L)
+        PPx2 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement2)), L)
+        PPx3 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement3)), L)
+
+        print Pz1, PPx1
+        print Pz2, PPx2
+        print Pz3, PPx3
+
+        print PPx1/Pz1
+        print PPx2/Pz2
+        print PPx3/Pz3
+        #self.assertAlmostEqual(Pmsm, Pmsm2)
+
+    def test_reparam_nonsquare(self):
+        x0 = array([ 6., -4. ])
+        A = arange(6).reshape((3,2))
+        prediction = np.dot(A, x0)
+        measurement1 = prediction  + array([ .2,  .45,  0. ])
+        measurement2 = prediction + array([ .2,    0.,  0. ])
+        measurement3 = prediction + array([ .1,  -.25,  0. ])
+        b = np.zeros(3)
+        sensor_cov = 2.*ones((3,3)) + eye(3)*3
+
+        z_mean = prediction
+        z_cov = sensor_cov
+        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
+        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
+        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
+
+        # alt param
+        #x_mean = 
+        #x_cov = inv(dots(A.T, inv(sensor_cov), A))
+        #Px1 = evaluate_normal(x0, solve(A, measurement1), x_cov)
+        #Px2 = evaluate_normal(x0, solve(A, measurement2), x_cov)
+        #Px3 = evaluate_normal(x0, solve(A, measurement3), x_cov)
+
+        L = dots(A.T, inv(sensor_cov).T, A)
+        print L
+        PPx1 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement1)), L)
+        PPx2 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement2)), L)
+        PPx3 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement3)), L)
+
+        z= measurement1
+        print dots(z-dot(A,x0), inv(sensor_cov), z-dot(A,x0))
+        print 
+
+        print Pz1, PPx1
+        print Pz2, PPx2
+        print Pz3, PPx3
+
+        print PPx1/Pz1
+        print PPx2/Pz2
+        print PPx3/Pz3
+        #self.assertAlmostEqual(Pmsm, Pmsm2)
 
     def test_reparametrization(self):
         x0 = array([ 2., -.5 ])
@@ -360,9 +494,34 @@ class BeliefTest(NumpyTestCase):
         # Same likelihood P(z | x), this time parametrized as an inverse-normal in x
         v,L = reparametrize_likelihood(x0, prediction, J, msm, sensor_infom)
         f_x = lambda x: evaluate_invnormal(x, v, L)
+        self.assertAlmostEqual(f_x(x0), f_z_linearized(x0))
+
+        xx = array([ 2.,   -1.5 ])
+        print 'Jacobian:',
+        print J
+        print 'v:'
+        print v
+        print 'L:'
+        print L
+        print 'JTJ:',
+        print dot(J.T,J)
+        print 'f_x(xx):', f_x(xx)
+        print 'f_z_linearized(xx):', f_z_linearized(xx)
+        print 'f_x(x0):', f_x(x0)
+        print 'f_z_linearized(x0):', f_z_linearized(x0)
+
+        vv, LL = normal_to_invnormal( dot(J,xx)+b, sensor_cov )
+        print 'vv:'
+        print vv
+        print 'LL:'
+        print LL
+
+        f_z_ff = evaluate_invnormal(msm, vv, LL)
+        print 'f_z_linearized - computed in inverse repr:',f_z_ff
+        
 
         # Check that the functions are identical
-        self.assertFunctionsEqual(f_x, f_z_linearized, near=x0, radius=4., nsamples=100)
+        #self.assertFunctionsEqual(f_x, f_z_linearized, near=x0, radius=3., nsamples=100)
 
 
     def test_posterior(self):
