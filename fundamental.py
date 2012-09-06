@@ -315,6 +315,8 @@ def optimize_fmatrix(xs0, xs1, R_init, t_init):
 
             # Expand the update to length 6
             if FREEZE_LARGEST:
+                print mask
+                print update
                 update = unmask(update, mask)
 
             if DEBUG:
