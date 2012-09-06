@@ -1,12 +1,22 @@
 import sys
 from numpy import *
 from numpy.linalg import *
+import numpy as np
 
 from helpers import *
 
+# Notes:
+#  - x0 and x1 are always points in two different images. The
+#    convention throughout is that all fundamental matrices
+#    are "from" image 0 (which contains x0) "to" image 1 (which
+#    contains x1). i.e.:
+#       x1.T * F * x0 = 0
+#  - Hence the epipolar line for x0 in image 1 is F.T*x0 and the
+#    epipolar line for x1 in image 0 is F*x1
+
 ################################################################################
-NUM_CORRESPONDENCES = 50
-SENSOR_NOISE        = 0.1
+NUM_CORRESPONDENCES = 500
+SENSOR_NOISE        = 0.01
 
 MAX_STEPS           = 15
 CONVERGENCE_THRESH  = 1e-5   # convergence detected when improvement less than this
@@ -15,16 +25,40 @@ INIT_DAMPING        = .1
 K                   = eye(3)
 Kinv                = inv(K)
 
+FREEZE_LARGEST      = True
 
 ################################################################################
-# Compute the fundamental matrix K^-T * R * skew(x) * K^-1
-def fund(K, R, t):
-    return dots(inv(K).T, skew(t), R, inv(K))
+# Compute the Fundamental matrix K^-T * R * skew(x) * K^-1
+def make_fundamental(K, R, t):
+    return dots(Kinv.T, skew(t), R, Kinv)
 
+################################################################################
+# Performs an "inverse" masking operation on a vector
+def unmask(v, mask, fill=0.):
+    assert mask.dtype.kind == 'b'
+    assert np.sum(mask) == len(v)
+    u = zeros(len(mask))
+    u[mask] = v
+    return u
+
+################################################################################
+def point_line_distance(p, l):
+    assert shape(p) == (3,)
+    assert shape(l) == (3,)
+    return abs(dot(p,l) / (p[2] * norm(l[:2])))
+
+################################################################################
+# Compute the algebraic error. Used only for sanity checking during debugging.
+def algebraic_error_forwards(K, R, t, xs0, xs1):
+    F = make_fundamental(K, R, t)
+    c = 0.
+    for x0,x1 in zip(xs0,xs1):
+        c += point_line_distance(dot(F, unpr(x0)), unpr(x1))
+    return c
 
 ################################################################################
 def F1x(K, R, t, x):
-    F = fund(K, R, t)
+    F = make_fundamental(K, R, t)
     return dot(F[0], x)
 
 def JF1x_R(K, R, t, x):
@@ -42,7 +76,7 @@ def JF1x(K, R, t, x):
 
 ################################################################################
 def FT1x(K, R, t, x):
-    F = fund(K, R, t)
+    F = make_fundamental(K, R, t)
     return dot(F[:,0], x)
 
 def JFT1x_R(K, R, t, x):
@@ -60,7 +94,7 @@ def JFT1x(K, R, t, x):
 
 ################################################################################
 def F2x(K, R, t, x):
-    F = fund(K, R, t)
+    F = make_fundamental(K, R, t)
     return dot(F[1], x)
 
 def JF2x_R(K, R, t, x):
@@ -78,7 +112,7 @@ def JF2x(K, R, t, x):
 
 ################################################################################
 def FT2x(K, R, t, x):
-    F = fund(K, R, t)
+    F = make_fundamental(K, R, t)
     return dot(F[:,1], x)
 
 def JFT2x_R(K, R, t, x):
@@ -101,7 +135,7 @@ def xFx(K, R, t, x0, x1):
     assert shape(t) == (3,)
     assert shape(x0) == (3,)
     assert shape(x1) == (3,)
-    return dots(x1, fund(K, R, t), x0)
+    return dots(x1, make_fundamental(K, R, t), x0)
 
 def JxFx_R(K, R, t, x0, x1):
     v = dot(Kinv, x0)
@@ -126,8 +160,6 @@ def residual(K, R, t, x0, x1):
     return f / sqrt(g1*g1 + g2*g2 + g3*g3 + g4*g4)
 
 def Jresidual(K, R, t, x0, x1):
-    m = zeros(3)
-
     f = xFx(K, R, t, x0, x1)
     Jf = JxFx(K, R, t, x0, x1)
 
@@ -146,15 +178,40 @@ def Jresidual(K, R, t, x0, x1):
     d = g1*g1 + g2*g2 + g3*g3 + g4*g4
     Jd = g1*Jg1 + g2*Jg2 + g3*Jg3 + g4*Jg4
     J = Jf/sqrt(d) - f*Jd / (d * sqrt(d))
-
     return J
 
 ################################################################################
-def cost(K, R, t, xs0, xs1):
+def residual_robust(K, R, t, x0, x1):
+    return cauchy_sqrtcost_from_residual(residual(K, R, t, x0, x1))
+
+def Jresidual_robust(K, R, t, x0, x1):
+    return Jcauchy_sqrtcost_from_residual(residual(K, R, t, x0, x1),
+                                          Jresidual(K, R, t, x0, x1))
+
+################################################################################
+def cost_robust(K, R, t, xs0, xs1):
     c = 0.
     for x0,x1 in zip(xs0,xs1):
-        c += square(residual(K, R, t, x0, x1))
+        c += square(residual_robust(K, R, t, x0, x1))
     return c
+
+################################################################################
+# Compute JT*J and JT*r
+def compute_normal_equations(K, R, t, xs0, xs1):
+    # Compute J^T * J and J^T * r
+    JTJ = zeros((6,6))  # 6x6
+    JTr = zeros(6)      # 6x1
+
+    for x0,x1 in zip(xs0,xs1):
+        # Jacobian for the i-th point:
+        ri =  residual_robust(K, R, t, x0, x1)
+        Ji = Jresidual_robust(K, R, t, x0, x1)
+        # Add to full jacobian
+        JTJ += outer(Ji, Ji)    # 6x1 * 1x6 -> 6x6
+        JTr +=   dot(Ji, ri)    # 6x1 * 1x1 -> 6x1
+
+    # Returns: a 6x6 matrix and a 6x1 vector
+    return JTJ, JTr
 
 ################################################################################
 # Given:
@@ -170,29 +227,17 @@ def optimize_fmatrix(xs0, xs1, R_init, t_init):
     damping = INIT_DAMPING
     R_cur = R_init.copy()
     t_cur = t_init.copy()
+    t_cur /= norm(t_cur)
 
     xs0 = unpr(xs0)   # convert a list of 2-vectors to a list of 3-vectors with the last element set to 1
     xs1 = unpr(xs1)
-    cost_cur = cost(K, R_cur, t_cur, xs0, xs1)
+    cost_cur = cost_robust(K, R_cur, t_cur, xs0, xs1)
 
     while num_steps < MAX_STEPS and damping < 1e+8 and not converged:
         print 'Step %d:   cost=%-10f damping=%f' % (num_steps, cost_cur, damping)
 
-        # Pick a parameter to freeze
-        # TODO: do this the proper way instead
-        freeze = 3 + argmax(abs(t_cur))
-        mask = arange(6) != freeze
-
-        # Compute J^T * J and J^T * r
-        JTJ = zeros((6,6))  # 6x6
-        JTr = zeros(6)      # 6x1
-        for x0,x1 in zip(xs0,xs1):
-            # Jacobian for the i-th point:
-            ri =  residual(K, R_cur, t_cur, x0, x1)
-            Ji = Jresidual(K, R_cur, t_cur, x0, x1)
-            # Add to full jacobian
-            JTJ += outer(Ji, Ji)    # 5x1 * 1x5 -> 5x5
-            JTr +=   dot(Ji, ri)    # 5x1 * 1x1 -> 5x1
+        # Compute normal equations
+        JTJ,JTr = compute_normal_equations(K, R_cur, t_cur, xs0, xs1)
 
         # Pick a step length
         while damping < 1e+8 and not converged:
@@ -202,33 +247,54 @@ def optimize_fmatrix(xs0, xs1, R_init, t_init):
                 break
 
             # Apply Levenberg-Marquardt damping
+            b = JTr.copy()
             A = JTJ.copy()
             for i in range(A.shape[0]):
                 A[i,i] *= (1. + damping)
+
+            # Freeze one translation parameter:
+            #   1. remove its row and column from normal equations
+            #   2. solve normal 5x5 normal equations
+            #   3. insert a zero into the update where the parameter would have been
+            if FREEZE_LARGEST:
+                param_to_freeze = 3 + np.argmax(t_cur)
+                mask = (arange(6) != param_to_freeze)
+                A = A[mask].T[mask].T  # Select 5 rows and corresponding columns
+                b = b[mask]            # Select the corresponding elements of RHS 
     
-            # Solve normal equations: 5x5
+            # Solve normal equations
             try:
-                update = -solve(A, JTr)
+                update = -solve(A, b)
             except LinAlgError:
                 # Badly conditioned: increase damping and try again
                 damping *= 10.
                 continue
 
+            # Expand the update
+            if FREEZE_LARGEST:
+                update = unmask(update, mask)
+
             # Take gradient step
             R_next = dot(R_cur, SO3_exp(update[:3]))
             t_next = t_cur + update[3:]
 
+            # Normalize to unit length
+            t_next /= norm(t_next)
+
             # Compute new cost
-            cost_next = cost(K, R_next, t_next, xs0, xs1)
+            cost_next = cost_robust(K, R_next, t_next, xs0, xs1)
             if cost_next < cost_cur:
                 # Cost decreased: accept the update
-                if cost_cur - cost_next < CONVERGENCE_THRESH or damping < 1e-8:
+                if cost_cur - cost_next < CONVERGENCE_THRESH:
                     converged = True
+
+                # Do not decrease damping if we're in danger of hitting machine epsilon
+                if damping > 1e-15:
+                    damping *= .1
 
                 R_cur = R_next
                 t_cur = t_next
                 cost_cur = cost_next
-                damping *= .1
                 num_steps += 1
                 break
 
@@ -243,12 +309,6 @@ def optimize_fmatrix(xs0, xs1, R_init, t_init):
 
 
 
-
-
-
-
-
-
 ################################################################################
 def setup_test_problem():
     R0 = eye(3)
@@ -256,6 +316,7 @@ def setup_test_problem():
 
     R1 = dots(rotation_xz(-.2), rotation_xy(.1), rotation_yz(1.5))
     t1 = array([-1., .5, -2.])
+    t1 /= norm(t1)
     
     R,t = relative_pose(R0,t0, R1,t1)
 
@@ -272,13 +333,21 @@ def setup_test_problem():
 ################################################################################
 def run_with_synthetic_data():
     R_true, t_true, xs0, xs1 = setup_test_problem()
+    #savetxt('standalone/essential_matrix_data/true_pose.txt',
+    #        hstack((R_true, t_true[:,newaxis])), fmt='%10f')
+
+    PERTURB = .1
 
     random.seed(73)
-    R_init = dot(R_true, SO3_exp(random.randn(3)*.2))
-    t_init = t_true + random.randn(3)*.1
+    R_init = dot(R_true, SO3_exp(random.randn(3)*PERTURB))
+    t_init = t_true + random.randn(3)*PERTURB
 
-    savetxt('essential_matrix_data/init_pose.txt', hstack((R_init, t_init[:,newaxis])), fmt='%10f')
-    savetxt('essential_matrix_data/100_correspondences_tenpercent_noise.txt', hstack((xs0, xs1)), fmt='%10f')
+    # savetxt('standalone/essential_matrix_data/init_pose.txt',
+    #         hstack((R_init, t_init[:,newaxis])),
+    #         fmt='%10f')
+    # savetxt('standalone/essential_matrix_data/100_correspondences_tenpercent_noise.txt',
+    #         hstack((xs0, xs1)),
+    #         fmt='%10f')
     
     R_opt, t_opt = optimize_fmatrix(xs0, xs1, R_init, t_init)
 
@@ -288,7 +357,18 @@ def run_with_synthetic_data():
     print hstack((R_init, t_init[:,newaxis]))
     print '\nFinal [R t]:'
     print hstack((R_opt, t_opt[:,newaxis]))
-    
+
+    print '\nError in R:'
+    print dot(R_opt.T, R_true) - eye(3)
+    print '\nError in t:'
+    print abs(t_opt - t_true)
+
+    print '\nAlgebraic error at true:'
+    print '  ',algebraic_error_forwards(K, R_true, t_true, xs0, xs1)
+    print '\nAlgebraic error at initial:'
+    print '  ',algebraic_error_forwards(K, R_init, t_init, xs0, xs1)
+    print '\nAlgebraic error at final:'
+    print '  ',algebraic_error_forwards(K, R_opt, t_opt, xs0, xs1)
 
 ################################################################################
 def run_with_data_from_file():
@@ -303,6 +383,7 @@ def run_with_data_from_file():
     P_init = loadtxt(sys.argv[2]).reshape((3,4))
     R_init = P_init[:,:3]
     t_init = P_init[:,3]
+    t_init /= norm(t_init)
 
     R_opt, t_opt = optimize_fmatrix(xs0, xs1, R_init, t_init)
 

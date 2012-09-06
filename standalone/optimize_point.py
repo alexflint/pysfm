@@ -124,12 +124,14 @@ def optimize_point(measurements, Rs, ts, x_init):
             cost_next = cost_robust(measurements, Rs, ts, x_next)
             if cost_next < cost_cur:
                 # Cost decreased: accept the update
-                if cost_cur - cost_next < CONVERGENCE_THRESH or damping < 1e-8:
+                if cost_cur - cost_next < CONVERGENCE_THRESH:
                     converged = True
+    
+                if damping > 1e-15:
+                    damping *= .1
 
                 x_cur = x_next
                 cost_cur = cost_next
-                damping *= .1
                 num_steps += 1
                 break
 

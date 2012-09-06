@@ -125,14 +125,15 @@ def optimize_pose(points, measurements, R_init, t_init):
             cost_next = cost_robust(points, measurements, R_next, t_next)
             if cost_next < cost_cur:
                 # Cost decreased: accept the update
-                if cost_cur - cost_next < CONVERGENCE_THRESH or damping < 1e-8:
+                if cost_cur - cost_next < CONVERGENCE_THRESH:
                     converged = True
+
+                if damping > 1e-15:
+                    damping *= .1
 
                 R_cur = R_next
                 t_cur = t_next
                 cost_cur = cost_next
-
-                damping *= .1
                 num_steps += 1
                 break
 

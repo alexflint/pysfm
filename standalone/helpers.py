@@ -1,13 +1,15 @@
 from numpy import *
 from numpy.linalg import *
 
-CAUCHY_SIGMA = .1           # determines the steepness of the Cauchy robustifier near zero
+CAUCHY_SIGMA     = .1   # determines the steepness of the Cauchy robustifier near zero
 CAUCHY_SIGMA_SQR = CAUCHY_SIGMA * CAUCHY_SIGMA
 
+################################################################################
 # Multiply a list of matrices
 def dots(*m):
     return reduce(dot, m)
 
+################################################################################
 # Divide the first n-1 elements in x by the last. If x is an array
 # then do this row-wise.
 def pr(x):
@@ -19,6 +21,7 @@ def pr(x):
     else:
         raise Exception, 'Cannot pr() an array with %d dimensions' % x.ndim
 
+################################################################################
 # Append the number 1 to x. If x is an array then do this row-wise.
 def unpr(x):
     x = asarray(x)
@@ -30,6 +33,7 @@ def unpr(x):
         raise Exception, 'Cannot unpr() an array with %d dimensions' % x.ndim
 
 
+################################################################################
 #
 # SO(3) stuff
 #
@@ -59,18 +63,26 @@ def SO3_exp(m):
     return eye(3) + a*skew(m) + b*skewsqr(m)
 
 
+################################################################################
 #
 # Robustifiers
 #
 
-# Given a scalar residual, compute the Cauchy-robustified error response.
-def cauchy_cost_from_residual(r):
-    return log(1. + r*r / CAUCHY_SIGMA_SQR)
-
-# Given a scalar residual, compute the derivative of the
+# Given a residual vector, compute the square root of the
 # Cauchy-robustified error response.
-def Jcauchy_cost_from_residual(r):
-    return 2*r / (CAUCHY_SIGMA_SQR + r*r)
+def cauchy_sqrtcost_from_residual(r):
+    return sqrt(log(1. + r*r / CAUCHY_SIGMA_SQR))
+
+# Given a residual vector and its gradient, compute the derivative of
+# the square root of the Cauchy-robustified error response.
+def Jcauchy_sqrtcost_from_residual(r, dr):
+    assert isscalar(r)
+    assert ndim(dr) == 1
+    sqrtcost = cauchy_sqrtcost_from_residual(r)
+    if sqrtcost < 1e-8:
+        return 0.     # this is in fact the correct thing to do here
+    return dr * r / (sqrtcost * (CAUCHY_SIGMA_SQR + r*r))
+
 
 # Given a 2x1 reprojection error (in raw pixel coordinates), evaluate
 # a robust error function and return a scalar cost.
@@ -99,6 +111,7 @@ def cauchy_residual_from_reprojection_error(x):
 
 
 
+################################################################################
 # Triangulate a 3D point from a set of observations by cameras with
 # fixed parameters. Uses least squares on the algebraic error.
 def triangulate_algebraic_lsq(K, Rs, ts, msms):
@@ -116,10 +129,10 @@ def triangulate_algebraic_lsq(K, Rs, ts, msms):
     return x
 
 
+################################################################################
 #
 # Geometry
 #
-
 
 # Get a relative pose (R01,t01) that goes from the pose (R0,t0) to (R1,t1)
 def relative_pose(R0, t0, R1, t1):

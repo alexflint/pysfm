@@ -460,6 +460,8 @@ def run_with_data_from_file():
 
     R_opt, t_opt = optimize_fmatrix(xs0, xs1, R_init, t_init)
 
+    t_init /= norm(t_init)
+
     print '\nInitial [R t]:'
     print hstack((R_init, t_init[:,newaxis]))
     print '\nFinal [R t]:'
