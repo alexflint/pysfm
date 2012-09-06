@@ -134,9 +134,9 @@ def check_descent_direction(update, f, x0, h=1e-8):
 gradient=%s\nupdate=%s''' % (dp, str(steepest_descent), str(update))
 
     # An angle greater than 45 degrees probably indicates something went wrong
-    if dp < sqrt(.5):
-        theta = rad2deg(arccos(dp))
-        print '  Warning: update was far from the descent direction (dp=%f, theta=%f)' % (dp,theta)
+#    if dp < sqrt(.5):
+#        theta = rad2deg(arccos(dp))
+#        print '  Warning: update was far from the descent direction (dp=%f, theta=%f)' % (dp,theta)
 
     # Compute the gradient in the direction of steepest descent
     g_steepest = (f(x0 + steepest_descent*h) - f0) / h
@@ -146,7 +146,7 @@ gradient=%s\nupdate=%s''' % (dp, str(steepest_descent), str(update))
 
     # Compute the gradient in the direction of update
     g_update = (f(x0 + update*h) - f0) / h
-    if g_update > 1e-8:
-        print '  Warning: epsilon*update increases the cost. (delta cost=%f)' % g_update
+#    if g_update > 1e-8:
+#        print '  Warning: epsilon*update increases the cost. (delta cost=%f)' % g_update
         
     
