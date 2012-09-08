@@ -98,6 +98,7 @@ def cauchy_residual_from_reprojection_error(x):
     x = asarray(x)
     rr = x[0]*x[0] + x[1]*x[1]
     if rr < 1e-8:   # within this window the residual is well-approximated as linear
+        raise Exception, 'Jacobians of cauchy are implemented incorrectly near zero!'
         J_near_zero = eye(2) / CAUCHY_SIGMA
         r_near_zero = x / CAUCHY_SIGMA
         return r_near_zero, J_near_zero

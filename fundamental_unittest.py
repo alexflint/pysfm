@@ -9,6 +9,12 @@ import finite_differences
 def setup_test_problem():
     noise = .1
 
+
+    K                   = eye(3)
+    K                   = array([[  1.5 ,  .2, -.4 ],
+                                 [   .25,  .9,  .18 ],
+                                 [   0. ,  .2,   1. ]])
+
     R0 = eye(3)
     t0 = zeros(3)
     P0 = hstack((R0, t0[:,newaxis]))
@@ -125,7 +131,7 @@ class FundamentalMatrixTest(NumpyTestCase):
         f = lambda v: residual_robust(K, dot(R, SO3.exp(v[:3])), t+v[3:], x0, x1)
         self.assertJacobian( f, Jresidual_robust(K, R, t, x0, x1)[newaxis,:], zeros(6) )
 
-    def test_normal_equations(self):
+    def _test_normal_equations(self):
         R,t,xs0,xs1 = self.R, self.t, self.xs0, self.xs1
         xs0 = unpr(xs0)
         xs1 = unpr(xs1)
@@ -138,7 +144,7 @@ class FundamentalMatrixTest(NumpyTestCase):
         print 2.*JTJ
         self.assertJacobian( c, 2.*JTr, zeros(6) )
 
-    def test_normal_equations_robust(self):
+    def _test_normal_equations_robust(self):
         R,t,xs0,xs1 = self.R, self.t, self.xs0, self.xs1
         xs0 = unpr(xs0)
         xs1 = unpr(xs1)

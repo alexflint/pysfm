@@ -180,37 +180,32 @@ def make_gaussian(k):
     return mean, cov
 
 ################################################################################
-# Reparametrize a measurement likelihood in terms of the state x. This function
-# Converts normals parametrized as
-#   N( z ; mean, cov )
-# into normals parametrized in the inverse representation in x:
-#   N^-1( x ; info_vec, info_mat )
-# where the measurement z is connected to the state x via a prediction function z=f(x)
+# Compute the parameters for a Gaussian expressing the likelihood 
+# P(z | x), where the output Gaussian is over x.
 #
 # The likelihood is p(z | x) = Normal(z ; mean, cov)
-#    where mean = prediction and cov = inv(sensor_info)
-# The parameters are as follows.
-#  - x is a state about which the prediction function has been linearized
-#  - prediction is the predicted measurement for the state x -- i.e. the mean of P(z|x).
-#  - J is the jacobian of the prediction function (df/dx), evaluated at x
-#  - measurement is the actual observation
-#  - sensor_info is the inverse of the covariance of the sensor model
-#    (i.e. it is the information matrix for z)
+#    where mean = prediction
+#           cov = inv(sensor_info)
 #
-# The function returns (info_m, info_v), which are the parameters for
-# the distribution p(z | x) = Normal(x ; mean, cov)
-# (Notice that the above is a normal where the variable is x wheras)
-# where:
-#   mean = inv(posterior_info_m) * posterior_info_v
-#   cov  = inv(posterior_info_m)
-def reparametrize_likelihood(x,
-                             prediction,
-                             Jprediction,
-                             measurement,
-                             sensor_info):
-    residual = measurement - prediction + dot(Jprediction, x)
-    # Compute information vector and information matrix for the Gaussian
-    v = dots(Jprediction.T, sensor_info, residual)
+# The parameters are:
+#  - x0 is an arbitrary state about which the prediction function has
+#    been linearized
+#  - PREDICTION is the predicted measurement for the state x0 --
+#    i.e. the mean of P(z|x0).
+#  - JPREDICTION is the jacobian of the prediction function at x0 --
+#    i.e. df/dx evaluated at x0
+#  - MEASUREMENT is the actual observation
+#  - SENSOR_INFO is the inverse of the covariance of the sensor model
+#
+# The function returns (v,L), which are the parameters for
+# the distribution p(z | x) = Normal^-1(x ; v, L)
+def compute_likelihood(x0,
+                       prediction,
+                       Jprediction,
+                       measurement,
+                       sensor_info):
+    residual = measurement - prediction
+    v = dots(Jprediction.T, sensor_info, residual + dot(Jprediction, x0))
     L = dots(Jprediction.T, sensor_info, Jprediction)
     return v, L
 
@@ -248,13 +243,13 @@ def reparametrize_likelihood(x,
 #    handy following gradient descent!
 #
 # The parameters are:
-#  - prior_v: the information vector for the prior distribution
-#  - prior_L: the information matrix for the prior distribution
-#  - x0: the state about which to linearize the prediction function (see notes above)
-#  - prediction: the predicted measurement at x0
-#  - Jprediction: the jacobian of the perdiction function at x0
-#  - measurement: the actual observation
-#  - sensor_info_mat: the uncertainty of the measurement, expressed as an information matrix
+#  - prior_v       : the information vector for the prior distribution
+#  - prior_L       : the information matrix for the prior distribution
+#  - x0            : the state about which to linearize the prediction function (see notes above)
+#  - prediction    : the predicted measurement at x0
+#  - Jprediction   : the jacobian of the prediction function at x0
+#  - measurement   : the actual observation
+#  - sensor_info   : the inverse of the sensor covariance
 def compute_posterior(prior_v,
                       prior_L,
                       x0,
@@ -262,15 +257,20 @@ def compute_posterior(prior_v,
                       Jprediction,
                       measurement,
                       sensor_info):
-    likelihood_v, likelihood_L = reparametrize_likelihood(x0,
-                                                          prediction,
-                                                          Jprediction,
-                                                          measurement,
-                                                          sensor_info)
+    likelihood_v, likelihood_L = compute_likelihood(x0,
+                                                    prediction,
+                                                    Jprediction,
+                                                    measurement,
+                                                    sensor_info)
     posterior_v = prior_v + likelihood_v
     posterior_L = prior_L + likelihood_L
     return posterior_v, posterior_L
     
+
+
+
+
+
 
 ################################################################################
 class BeliefTest(NumpyTestCase):
@@ -362,194 +362,38 @@ class BeliefTest(NumpyTestCase):
         self.assertArrayEqual(marg_mean, marg_mean2)
         self.assertArrayEqual(marg_cov, marg_cov2)
 
-    def test_reparam_manual(self):
-        x0 = array([ 5., -4. ])
-        A = arange(6).reshape((3,2))
-        prediction = np.dot(A, x0)
-        b = np.zeros(3)
-        sensor_cov = eye(3)
-
-        measurement1 = prediction + array([.2,  -1.,  .45])
-        measurement2 = prediction + array([.2,  -1.5, .45])
-        measurement3 = prediction + array([.25, -1.,   0.])
-
-        z_mean = prediction
-        z_cov = sensor_cov
-        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
-        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
-        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
-
-        # alt param
-        L = dots(A.T, inv(sensor_cov), A)
-        Px1 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement1)), L)
-        Px2 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement2)), L)
-        Px3 = evaluate_invnormal(x0, dots(A.T, solve(sensor_cov, measurement3)), L)
-
-        print Px1/Pz1
-        print Px2/Pz2
-        print Px3/Pz3
-
-        #self.assertAlmostEqual(Pmsm, Pmsm2)
-
-    def test_reparam_square(self):
-        x0 = array([ 6., -4. ])
-        A = arange(4).reshape((2,2))
-        prediction = np.dot(A, x0)
-        measurement1 = prediction  + array([ .2,  .45 ])
-        measurement2 = prediction + array([ .2,   0. ])
-        measurement3 = prediction + array([ .1, -.25 ])
-        b = np.zeros(2)
-        sensor_cov = 2.*ones((2,2)) + eye(2)*3
-
-        z_mean = prediction
-        z_cov = sensor_cov
-        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
-        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
-        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
-
-        # alt param
-        #x_mean = 
-        #x_cov = inv(dots(A.T, inv(sensor_cov), A))
-        #Px1 = evaluate_normal(x0, solve(A, measurement1), x_cov)
-        #Px2 = evaluate_normal(x0, solve(A, measurement2), x_cov)
-        #Px3 = evaluate_normal(x0, solve(A, measurement3), x_cov)
-
-        L = dots(A.T, inv(sensor_cov), A)
-        PPx1 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement1)), L)
-        PPx2 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement2)), L)
-        PPx3 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov, measurement3)), L)
-
-        print Pz1, PPx1
-        print Pz2, PPx2
-        print Pz3, PPx3
-
-        print PPx1/Pz1
-        print PPx2/Pz2
-        print PPx3/Pz3
-        #self.assertAlmostEqual(Pmsm, Pmsm2)
-
-    def test_reparam_nonsquare(self):
-        x0 = array([ 6., -4. ])
-        A = arange(6).reshape((3,2))
-        prediction = np.dot(A, x0)
-        measurement1 = prediction  + array([ .2,  .45,  0. ])
-        measurement2 = prediction + array([ .2,    0.,  0. ])
-        measurement3 = prediction + array([ .1,  -.25,  0. ])
-        b = np.zeros(3)
-        sensor_cov = 2.*ones((3,3)) + eye(3)*3
-
-        z_mean = prediction
-        z_cov = sensor_cov
-        Pz1 = evaluate_normal(measurement1, z_mean, z_cov)
-        Pz2 = evaluate_normal(measurement2, z_mean, z_cov)
-        Pz3 = evaluate_normal(measurement3, z_mean, z_cov)
-
-        # alt param
-        #x_mean = 
-        #x_cov = inv(dots(A.T, inv(sensor_cov), A))
-        #Px1 = evaluate_normal(x0, solve(A, measurement1), x_cov)
-        #Px2 = evaluate_normal(x0, solve(A, measurement2), x_cov)
-        #Px3 = evaluate_normal(x0, solve(A, measurement3), x_cov)
-
-        L = dots(A.T, inv(sensor_cov).T, A)
-        print L
-        PPx1 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement1)), L)
-        PPx2 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement2)), L)
-        PPx3 = evaluate_invnormal(x0, dot(A.T, solve(sensor_cov.T, measurement3)), L)
-
-        z= measurement1
-        print dots(z-dot(A,x0), inv(sensor_cov), z-dot(A,x0))
-        print 
-
-        print Pz1, PPx1
-        print Pz2, PPx2
-        print Pz3, PPx3
-
-        print PPx1/Pz1
-        print PPx2/Pz2
-        print PPx3/Pz3
-        #self.assertAlmostEqual(Pmsm, Pmsm2)
-
-    def test_reparametrization(self):
-        x0 = array([ 2., -.5 ])
-
-        sensor_cov = diag([ .2, .15, .8 ])
-        sensor_infom = inv(sensor_cov)
-
-        prediction = self.predict(x0)
-        J = self.Jpredict(x0)
-        msm = prediction + [ .01, -.025, .22 ]
-
-        # Likelihood P(z | x), parametrized as a normal in z
-        f_z_exact = lambda x: evaluate_normal(msm, self.predict(x), sensor_cov)
-
-        # The same likelihood, linearized at x0. They should be
-        # identical at x0 Note the distinction between x and x0. The
-        # former is the variable, the latter is the linearization
-        # point.
-        b = prediction - dot(J, x0)
-        f_z_linearized = lambda x: evaluate_normal(msm, dot(J,x)+b, sensor_cov)
-        self.assertAlmostEqual(f_z_exact(x0), f_z_linearized(x0))
-
-        # Same likelihood P(z | x), this time parametrized as an inverse-normal in x
-        v,L = reparametrize_likelihood(x0, prediction, J, msm, sensor_infom)
-        f_x = lambda x: evaluate_invnormal(x, v, L)
-        self.assertAlmostEqual(f_x(x0), f_z_linearized(x0))
-
-        xx = array([ 2.,   -1.5 ])
-        print 'Jacobian:',
-        print J
-        print 'v:'
-        print v
-        print 'L:'
-        print L
-        print 'JTJ:',
-        print dot(J.T,J)
-        print 'f_x(xx):', f_x(xx)
-        print 'f_z_linearized(xx):', f_z_linearized(xx)
-        print 'f_x(x0):', f_x(x0)
-        print 'f_z_linearized(x0):', f_z_linearized(x0)
-
-        vv, LL = normal_to_invnormal( dot(J,xx)+b, sensor_cov )
-        print 'vv:'
-        print vv
-        print 'LL:'
-        print LL
-
-        f_z_ff = evaluate_invnormal(msm, vv, LL)
-        print 'f_z_linearized - computed in inverse repr:',f_z_ff
-        
-
-        # Check that the functions are identical
-        #self.assertFunctionsEqual(f_x, f_z_linearized, near=x0, radius=3., nsamples=100)
-
-
     def test_posterior(self):
-        prior_mean = array([ 2., -.5 ])
-        prior_cov  = array([[ 5.,   1. ],
-                            [ 1.,   4. ]])
+        A = np.arange(6).reshape((2,3))
+        b = array([-2., -1.])
+
+        prior_cov  =  diag([5., 2., 1.5])
+        prior_mean = array([2., 3., 2.1])
+        prior_v,prior_L = normal_to_invnormal(prior_mean, prior_cov)
+
+        predict = lambda x: dots(A,x)+b
+
+        x0 = array([-5., 0., 3.])
+
+        z = predict(x0) + array([.1, -.21])
+        z_cov = diag([2., 4.]) + 1.
+        z_info = inv(z_cov)
+
+        posterior_v, posterior_L = compute_posterior(prior_v, prior_L, x0, predict(x0), A, z, z_info)
         
+        P_prior = lambda x: evaluate_invnormal(x, prior_v, prior_L)
+        P_lik   = lambda x: evaluate_normal(z, predict(x), z_cov)
+        P_post  = lambda x: evaluate_invnormal(x, posterior_v, posterior_L)
+        P_joint = lambda x: P_prior(x) * P_lik(x)
 
-        # This is the state we linearize about:
-        x0 = prior_mean
-        
-        # Sensor data
-        sensor_cov = diag([ .2, .15, .8 ])
-        sensor_infom = inv(sensor_cov)
+        nx = 10
+        xs0 = linspace(x0[0]-2., x0[0]+2., nx)
+        xs = vstack((xs0, ones(nx)*x0[1], ones(nx)*x0[2])).T
 
-        prediction = self.predict(x0)
-        msm = prediction  + [ .01, -.025, .22 ]
-        J = self.Jpredict(x0)
+        posts  = array([ P_post(x) for x in xs ])
+        joints = array([ P_joint(x) for x in xs ])
 
-        # Likelihood P(z | x), parametrized as a normal in z
-        f_z_exact = lambda x: evaluate_normal(msm, self.predict(x), sensor_cov)
-
-        # The same likelihood, linearized at x0. They should be identical at x0
-        b = prediction - dot(J, x0)
-        f_z_linearized = lambda x: evaluate_normal(msm, dot(J,x)+b, sensor_cov)
-        self.assertAlmostEqual(f_z_exact(x0), f_z_linearized(x0))
-
-        
+        # The posterior should be proportional (not equal) to the joint
+        self.assertArrayProportional(posts, joints)
 
 if __name__ == '__main__':
     import unittest

@@ -117,6 +117,9 @@ class NumpyTestCase(unittest.TestCase):
         if err > 1e-7:
             raise ArrayEqualAssertionError(A, B)
 
+    # Assert that two arrays are equal up to a constant: A = k*B, for some k
+    def assertArrayProportional(self, A, B):
+        self.assertArrayEqual(A * sum(B), B * sum(A))
 
     # Check that two functions are equal (up to machine precision)
     def assertFunctionsEqual(self, f1, f2, near, radius, nsamples, tol=1e-5):

@@ -68,15 +68,21 @@ def check_jacobian(f, Jf, x0):
     if callable(Jf):
         Jf = Jf(x0)
 
+    # Upgrade Jf to 2 dimensions because that is what numeric_jacobian returns
+    Jf = atleast_2d(Jf)
+
+    # Compute jaobians numerically
     x0 = asarray(x0)
     Jf_numeric = numeric_jacobian(f, x0, 1e-8)
 
+    # Check shapes
     if Jf.shape != Jf_numeric.shape:
         print 'Error: shape mismatch'
         print '  analytic jacobian was '+str(Jf.shape)
         print '  numeric jacobian was '+str(Jf_numeric.shape)
         return False
 
+    # Check values
     Jf_abserr = np.abs(Jf - Jf_numeric)
     mask = np.abs(Jf_numeric) > 1.
     Jf_abserr[mask] /= np.abs(Jf_numeric[mask])

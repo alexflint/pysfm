@@ -30,7 +30,9 @@ CONVERGENCE_THRESH  = 1e-5   # convergence detected when improvement less than t
 INIT_DAMPING        = .1
 
 K                   = eye(3)
-Kinv                = inv(K)
+K                   = array([[  1.5 ,  0., -.4 ],
+                             [   0.,  .9,  .18 ],
+                             [   0. ,  0.,   1. ]])
 
 CAUCHY_SIGMA        = .1
 CAUCHY_SIGMA_SQR    = CAUCHY_SIGMA * CAUCHY_SIGMA
@@ -49,8 +51,9 @@ def unmask(v, mask, fill=0.):
     return u
 
 ################################################################################
-# Compute the Fundamental matrix K^-T * R * skew(x) * K^-1
+# Compute the Fundamental matrix K^-T * skew(t) * R * K^-1
 def make_fundamental(K, R, t):
+    Kinv = inv(K)
     return dots(Kinv.T, skew(t), R, Kinv)
 
 ################################################################################
@@ -74,17 +77,17 @@ def cauchy_cost(r):
 
 ################################################################################
 def cauchy_jacobian(r):
-    C = cauchy_cost(r)
+    C   = cauchy_cost(r)
     JTJ = dot(J.T, J)
     g   = dot(J.T, r)
-    d = CAUCHY_SIGMA_SQR + dot(r,r)
+    d   = CAUCHY_SIGMA_SQR + dot(r,r)
     return 2*JTJ/d - 4*outer(g,g)/(d*d)
 
 ################################################################################
 def cauchy_hessian_firstorder(r, J):
     JTJ = dot(J.T, J)
     g   = dot(J.T, r)
-    d = CAUCHY_SIGMA_SQR + dot(r,r)
+    d   = CAUCHY_SIGMA_SQR + dot(r,r)
     return 2.*JTJ/d - 4.*outer(g,g)/(d*d)
 
 ################################################################################
@@ -121,10 +124,13 @@ def F1x(K, R, t, x):
     return dot(F[0], x)
 
 def JF1x_R(K, R, t, x):
+    Kinv = inv(K)
     v = dots(R.T, skew(t), Kinv[:,0])
-    return dots(skew(v), Kinv, x)
+    #return dots(skew(v), Kinv, x)
+    return dots(Kinv.T, skew(t), R, skew(-dot(Kinv, x)))[0]
 
 def JF1x_t(K, R, t, x):
+    Kinv = inv(K)
     v = Kinv[:,0]
     return -dots(skew(v), R, Kinv.T, x)
 
@@ -139,10 +145,12 @@ def FT1x(K, R, t, x):
     return dot(F[:,0], x)
 
 def JFT1x_R(K, R, t, x):
+    Kinv = inv(K)
     v = Kinv[:,0]
     return dots(skew(v), R.T, skew(-t), Kinv, x)
 
 def JFT1x_t(K, R, t, x):
+    Kinv = inv(K)
     v = dot(R, Kinv[:,0])
     return dots(skew(v), Kinv, x)
 
@@ -157,10 +165,12 @@ def F2x(K, R, t, x):
     return dot(F[1], x)
 
 def JF2x_R(K, R, t, x):
+    Kinv = inv(K)
     v = dots(R.T, skew(t), Kinv[:,1])
     return dots(skew(v), Kinv, x)
 
 def JF2x_t(K, R, t, x):
+    Kinv = inv(K)
     v = Kinv[:,1]
     return -dots(skew(v), R, Kinv, x)
 
@@ -175,10 +185,12 @@ def FT2x(K, R, t, x):
     return dot(F[:,1], x)
 
 def JFT2x_R(K, R, t, x):
+    Kinv = inv(K)
     v = Kinv[:,1]
     return dots(skew(v), R.T, skew(-t), Kinv, x)
 
 def JFT2x_t(K, R, t, x):
+    Kinv = inv(K)
     v = dot(R, Kinv[:,1])
     return dots(skew(v), Kinv, x)
 
@@ -197,10 +209,12 @@ def xFx(K, R, t, x0, x1):
     return dots(x1, make_fundamental(K, R, t), x0)
 
 def JxFx_R(K, R, t, x0, x1):
+    Kinv = inv(K)
     v = dot(Kinv, x0)
     return dots(x1, Kinv.T, skew(t), R, skew(-v))
 
 def JxFx_t(K, R, t, x0, x1):
+    Kinv = inv(K)
     v = dots(R, Kinv, x0)
     return dots(x1, Kinv.T, skew(-v))
 
