@@ -57,7 +57,7 @@ def predict_next(x):
 def Jpredict_next(x):
     return array([[ x[0]/norm(x) , x[1]/norm(x) ],
                   [ 0.           , 1.           ]])
-    
+
 
 ################################################################################
 # Compute the log likelihood of states x given measurements z

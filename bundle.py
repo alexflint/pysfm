@@ -62,6 +62,11 @@ class Camera(object):
         self.idx = idx
         self.R = np.asarray(R)
         self.t = np.asarray(t)
+
+    # Helper for brevity in getting an (R,t) tuple
+    @property
+    def Rt(self):
+        return (self.R, self.t)
         
     # Create a 3x4 projection matrix from the rotation and translation
     def projection_matrix(self):
@@ -73,6 +78,10 @@ class Camera(object):
         self.R = np.dot(self.R, lie.SO3.exp(delta[:3]))
         self.t += delta[3:]
         return self
+
+    def transform(self, R, t):
+        self.R = np.dot(R, self.R)
+        self.t = np.dot(R, self.t) + t
 
     def __str__(self):
         return repr(self)
@@ -138,8 +147,10 @@ class Bundle(object):
     # Check sizes etc
     def check_consistency(self):
         assert self.sensor_model is not None
-        assert np.shape(self.K) == (3, 3), 'shape was '+str(np.shape(self.K))
-        assert np.shape(self.reconstruction) == (len(self.tracks), 3)
+        assert np.shape(self.K) == (3, 3), \
+            'shape was '+str(np.shape(self.K))
+        assert np.shape(self.reconstruction) == (len(self.tracks), 3), \
+            'shape was '+str(np.shape(self.reconstruction))
         assert np.sum(np.square(self.reconstruction)) > 1e-8, 'reconstruction must be initialized'
 
         for i,track in enumerate(self.tracks):
@@ -178,7 +189,12 @@ class Bundle(object):
                     fmt = 'Invalid camera ID=%d in new track at camera_ids[%d])'
                     raise Exception(fmt % (int(idx), i))
 
+        if len(self.reconstruction) != len(self.tracks):
+            print 'Warning: add_track found %d tracks but self.reconstruction.shape is %s' % \
+                (len(self.tracks), str(self.reconstruction.shape))
+
         self.tracks.append(track)
+        self.reconstruction = np.vstack((self.reconstruction, np.zeros(3)))
         return track
 
     # Get a list of all rotation matrices
@@ -188,6 +204,10 @@ class Bundle(object):
     # Get a list of all translation vectors
     def ts(self):
         return np.array([ cam.t for cam in self.cameras ])
+
+    # Get a list of 3x4 projection matrices
+    def projection_matrices(self):
+        return np.array([ cam.projection_matrix() for cam in self.cameras ])
 
     # Get a list of reconstructed points (one for each track)
     def points(self):
@@ -215,7 +235,8 @@ class Bundle(object):
 
     # Get the number of free parameters in the entire system
     def num_params(self):
-        return len(self.cameras) * Bundle.NumCamParams + \
+        return \
+            len(self.cameras) * Bundle.NumCamParams + \
             len(self.tracks) * Bundle.NumPointParams
 
     # Get the prediction for the j-th track in the i-th camera
@@ -329,14 +350,16 @@ class Bundle(object):
         # Create the bundle
         b = Bundle()
         b.K = K.copy()
-        b.reconstruction = np.asarray(pts).copy()
         for R,t in zip(Rs,ts):
             b.add_camera(Camera(R,t))
         for i in range(measurements.shape[1]):
             camera_ids = list(np.nonzero(measurement_mask[:,i])[0])
             msms = measurements[ camera_ids, i ]
             b.add_track(Track(camera_ids, msms))
-            
+
+        # Set up the structure
+        b.reconstruction = np.asarray(pts).copy()
+
         # Return the bundle
         return b
 
@@ -344,6 +367,32 @@ class Bundle(object):
 
 
 
+    ############################################################################
+    def make_relative_to_first_camera(self):
+        '''Apply a rotation and translation to the cameras and structure
+        in BUNDLE such that the first camera has zero rotation and
+        zero translation.'''
+        R,t = self.cameras[0].Rt
+        self.transform(R, t)
+
+    
+    ############################################################################
+    # Apply the following rigid transform to all points and cameras in this bundle:
+    #   x -> R*x + t
+    # The measurements never change since the points and cameras move together.
+    def transform(self, R, t):
+        assert np.shape(R) == (3,3), 'shape was '+str(np.shape(R))
+        assert np.shape(t) == (3,),  'shape was '+str(np.shape(t))
+
+        # 3d points get sent through the forward transform
+        for i in range(len(self.reconstruction)):
+            self.reconstruction[i] = np.dot(R, self.reconstruction[i]) + t
+            
+        # cameras are multiplied by the reverse transform
+        RR = R.T
+        tt = -np.dot(R.T, t)
+        for camera in self.cameras:
+            camera.transform(RR, tt)
 
     ################################################################################
     # These functions are now only used for unit-testing bundle adjustment. They are

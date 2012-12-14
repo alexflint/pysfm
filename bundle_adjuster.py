@@ -7,6 +7,7 @@ from algebra import *
 import optimize
 from bundle import Bundle
 
+############################################################################
 def select(L, mask):
     L = asarray(L)
     mask = asarray(mask)
@@ -23,8 +24,20 @@ def select(L, mask):
     return subset,subset_indices
 
 ############################################################################
-class BundleAdjuster:
+class NormalEquationsIllconditioned(Exception):
+    '''Thrown when the bundle adjuster fails to solve a set of normal
+    equations'''
+    pass
+
+############################################################################
+class BundleAdjuster(object):
+    # The threshold applied to singular values when inverting the
+    # lower-diagonal (HPP) blocks for the schur compliment. Set to
+    # None to use full inverse.
+    SCHUR_COMPLIMENT_PINV_THRESHOLD = 1e-5
+
     def __init__(self, bundle=None):
+        '''Initialize a bundle adjuster.'''
         self.num_steps = 0
         self.converged = False
         self.costs = []
@@ -120,8 +133,8 @@ class BundleAdjuster:
                 # Compute update
                 try:
                     motion_update,structure_update = self.compute_update(damping, param_mask)
-                except LinAlgError:
-                    # Matrix was singular: increase damping
+                except NormalEquationsIllconditioned:
+                    # Matrix was near-singular: increase damping
                     damping *= 10.
                     self.converged = damping > 1e+8
                     continue
@@ -163,17 +176,19 @@ class BundleAdjuster:
     def compute_update(self, damping, param_mask=None):
         nc = len(self.optim_camera_ids)
         nt = len(self.optim_track_ids)
+        nparams = Bundle.NumCamParams * nc + Bundle.NumPointParams * nt
 
         # The way we do parameter elimination here is in fact
         # mathematically equivalent to eliminating the parameters from
         # the original matrix. It is slightly inefficient though.
+        
         if param_mask is None:
-            param_mask = ones(6*nc + 3*nt, bool)
+            param_mask = ones(nparams, bool)
         else:
             assert param_mask.dtype.kind == 'b'
-            assert shape(param_mask) == (6*nc + 3*nt,) , \
-                'shape was %s by there are %d parameters' % \
-                (str(shape(param_mask)), self.bundle.num_params())
+            assert shape(param_mask) == (nparams,) , \
+                'param_mask had shape %s but there are %d parameters' % \
+                (str(shape(param_mask)), nparams)
 
         # Get parameter masks for camera / point parameters
         cam_param_mask = param_mask[:nc*6 ]
@@ -185,7 +200,11 @@ class BundleAdjuster:
         self.apply_damping(damping)
         S, b = self.compute_schur_complement()
         motion_update = self.solve_motion_normal_eqns(S, b, cam_param_mask)
+        #print 'Motion update:'
+        #print motion_update
         structure_update = self.backsubstitute(motion_update)
+        #print 'Structure update:'
+        #print structure_update
         return -motion_update, -structure_update
 
     # Compute components of the Hessian that will be used in the Schur complement
@@ -229,9 +248,12 @@ class BundleAdjuster:
         bundle = self.bundle
 
         # Invert the lower-right diagonal blocks. These are used again
-        # in backsubstitute so import to invert all the right blocks.
+        # in backsubstitute so important to invert all the right blocks.
         for pos,i in enumerate(self.track_ids):
-            self.HPP_invs[pos] = inv(self.HPPs[pos])
+            if self.SCHUR_COMPLIMENT_PINV_THRESHOLD is None:
+                self.HPP_invs[pos] = inv(self.HPPs[pos])  # [alex] testing psuedoinverse
+            else:
+                self.HPP_invs[pos] = pinv(self.HPPs[pos], self.SCHUR_COMPLIMENT_PINV_THRESHOLD)  # [alex] testing psuedoinverse
 
         # Intialize the LHS and RHS of camera normal equations
         nc = len(self.optim_camera_ids)
@@ -268,12 +290,19 @@ class BundleAdjuster:
         AC = S.transpose((0,2,1,3)).reshape((nc*6,nc*6))
         bC = b.flatten()
 
+        #print 'Schur compliment conditioning: %f' % cond(AC)
+
         # Apply the parameter mask
         AC_reduced = AC[param_mask].T[param_mask].T
         bC_reduced = bC[param_mask]
 
         # Solve the system
-        dC_reduced = solve(AC_reduced, bC_reduced)
+        # put the try/catch right here to avoid inadvertently catching
+        # and swallowing exceptions from elsewhere
+        try:
+            dC_reduced = solve(AC_reduced, bC_reduced)
+        except LinAlgError:
+            raise NormalEquationsIllconditioned
         
         # Reverse the parameter mask
         dC = zeros(nc*6)
@@ -296,6 +325,7 @@ class BundleAdjuster:
             dP[ipos] = self.bPs[i]
             for jpos,j in enumerate(self.optim_camera_indices):
                 dP[ipos] -= dots(self.HCPs[j,i].T, dC[jpos])
+            #print 'conditioning of HPPs[%d]: %f' % (i, cond(self.HPPs[i]))
             dP[ipos] = dots(self.HPP_invs[i], dP[ipos])
 
         return dP

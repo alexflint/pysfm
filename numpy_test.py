@@ -140,7 +140,7 @@ class NumpyTestCase(unittest.TestCase):
 
 
     # Check that the Jacobian of f (computed numerically) equals Jf
-    def assertJacobian(self, f, Jf, x0, tol=1e-5, h=1e-8):
+    def assertJacobian(self, f, Jf, x0, tol=1e-5, h=1e-8, verbose=False):
         x0 = asarray(x0)
 
         # if Jf is a function then just evaluate it once
@@ -159,10 +159,13 @@ class NumpyTestCase(unittest.TestCase):
         J_abserr = np.abs(J_analytic - J_numeric)
         mask = np.abs(J_numeric) > 1.
         J_abserr[mask] /= np.abs(J_numeric[mask])
-
+    
         # Check error
         maxerr = np.max(J_abserr)  # threshold should be independent of matrix size
         if maxerr > tol:
             raise JacobianAssertionError(J_numeric, J_analytic)
-
-
+        elif verbose:
+            print 'numeric:'
+            print J_numeric
+            print 'analytic:'
+            print J_analytic

@@ -1,190 +1,66 @@
-import numpy as np
-import matplotlib.pyplot as plt
+from numpy import *
+import algebra
 
-from algebra import *
+################################################################################
+def estimate(fp, tp):
+    fp = algebra.unpr(asarray(fp, float)).T
+    tp = algebra.unpr(asarray(tp, float)).T
+    return estimate_lsq(fp, tp)
 
-# Build a homography from w
-def H(w):
-    return np.array([[ w[0], 0.,   w[2] ],
-                     [ 0.,   w[1], w[3] ],
-                     [ 0.,   0.,   1.   ]])
+################################################################################
+def estimate_lsq(fp, tp):
+    """ find homography H, such that fp is mapped to tp
+        using the linear DLT method. Points are conditioned
+        automatically."""
 
-wtrue = np.array([2.5, 1.5, -1., 0.])
-Htrue = H(wtrue)
+    fp = asarray(fp, float)
+    tp = asarray(tp, float)
 
-X = np.array([[0., 0.],
-              [3., 2.],
-              [0., 1.]])
+    if fp.shape[0] != 3:
+        raise RuntimeError, 'number of rows in fp must be 3 (there were %d)' % fp.shape[0]
 
-Y = prdot(Htrue, X)
+    if tp.shape[0] != 3:
+        raise RuntimeError, 'number of rows in tp must be 3 (there were %d)' % tp.shape[0]
 
-def f(w):
-    assert np.shape(w) == (4,), 'w had shape: '+str(np.shape(w))
-    return (prdot(H(w), X) - Y).flatten()
+    if fp.shape[1] != tp.shape[1]:
+        raise RuntimeError, 'number of points do not match'
 
-def c(w):
-    fw = f(w)
-    return np.dot(fw, fw)
+    #condition points (important for numerical reasons)
+    #--from points--
+    m = mean(fp[:2], axis=1)
+    maxstd = max(std(fp[:2], axis=1))
+    if abs(maxstd) < 1e-8:
+        # This is a degenerate configuration
+        raise linalg.LinAlgError
 
-def Jf(w):
-    npts = X.shape[0]
-    J = np.empty((2*npts, 4))
-    for i in range(npts):
-        J[i*2]   = [ X[i,0], 0., 1., 0. ]
-        J[i*2+1] = [ 0., X[i,1], 0., 1. ]
-    return J     
+    C1 = diag([1/maxstd, 1/maxstd, 1]) 
+    C1[0][2] = -m[0]/maxstd
+    C1[1][2] = -m[1]/maxstd
+    fp = dot(C1,fp)
 
-def check_jacobians(w0):
-    w0 = np.asarray(w0)
+    #--to points--
+    m = mean(tp[:2], axis=1)
+    #C2 = C1.copy() #must use same scaling for both point sets
+    maxstd = max(std(tp[:2], axis=1))
+    if abs(maxstd) < 1e-8:
+        # This is a degenerate configuration
+        raise linalg.LinAlgError
 
-    # compute gradients numerically
-    J_numeric = numeric_jacobian(f, w0, 1e-8)
-    grad_numeric = numeric_jacobian(c, w0, 1e-8)
+    C2 = diag([1/maxstd, 1/maxstd, 1])
+    C2[0][2] = -m[0]/maxstd
+    C2[1][2] = -m[1]/maxstd
+    tp = dot(C2,tp)
 
-    # check analytic gradients
-    f0 = f(w0)
-    J_ana = Jf(w0)
+    #create matrix for linear method, 2 rows for each correspondence pair
+    nbr_correspondences = fp.shape[1]
+    A = zeros((2*nbr_correspondences,9))
+    for i in range(nbr_correspondences):        
+        A[2*i] = [-fp[0][i],-fp[1][i],-1,0,0,0,tp[0][i]*fp[0][i],tp[0][i]*fp[1][i],tp[0][i]]
+        A[2*i+1] = [0,0,0,-fp[0][i],-fp[1][i],-1,tp[1][i]*fp[0][i],tp[1][i]*fp[1][i],tp[1][i]]
 
-    print f0.shape
-    print J_ana.shape
+    U,S,V = linalg.svd(A)
 
-    grad_ana = 2. * np.dot(f0, J_ana)
-    
-    J_err = np.abs(J_ana - J_numeric)
-    grad_err = np.abs(grad_ana - grad_numeric)
+    H = V[8].reshape((3,3))    
 
-    print 'Numeric gradient:'
-    print grad_numeric
-    print 'Analytic gradient:'
-    print grad_ana
-    print 'Residual of gradient:'
-    print grad_err
-    print 'Error in gradient:'
-    print np.linalg.norm(grad_err)
-
-    print 'Numeric jacobian:'
-    print J_numeric
-    print 'Analytic jacobian:'
-    print J_ana
-    print 'Residual of jacobian:'
-    print J_err
-    print 'Error in jacobian:'
-    print np.linalg.norm(J_err)
-
-
-def optimize_first_order():
-    kMinStepSize = 1e-8
-    kMaxSteps = 10
-
-    w0 = np.zeros(4)
-    w_path = [ w0 ]
-
-    c_prev = None
-
-    nsteps = 0
-    stepsize = 1.
-    w_cur = w0;
-    while nsteps < kMaxSteps:
-        f_cur = f(w_cur)
-        c_cur = np.dot(f_cur, f_cur)
-        Jf_cur = Jf(w_cur)
-        grad_cur = 2. * np.dot(f_cur, Jf_cur)
-
-        grad_numeric = numeric_jacobian(c, w_cur, 1e-8)
-
-        print 'Cost: %f' % c_cur
-        print '  Residuals: '+str(f_cur)
-        print '  Gradient: '+str(grad_cur)
-        print '  Numeric gradient: '+str(grad_numeric)
-        print '  Step size: '+str(stepsize)
-        
-        while stepsize > kMinStepSize:
-            w_next = w_cur - grad_cur * stepsize;
-            c_next = c(w_next)
-            if (c_next < c_cur):
-                w_cur = w_next
-                w_path.append(w_cur)
-                stepsize *= 1.1
-                break
-            else:
-                stepsize *= .5
-
-        nsteps += 1
-            
-    # print and return
-    plt.clf()
-    plt.xlim(-5, 10)
-    plt.ylim(-5, 5)
-    plt.plot(Y[:,0], Y[:,1], 'og')
-
-    colors = 'rgbcmyk'
-    C = colors[:len(X)]
-
-    for x,color in zip(X,C):
-        x_path = np.array([ prdot(H(w), x) for w in w_path ])
-        plt.plot(x_path[:,0], x_path[:,1], 'x-'+color)
-
-    plt.savefig('first_order_path.pdf')
-
-def solve_normal_equations(J, r):
-    A = np.dot(J.T, J)
-    b = np.dot(J.T, r)
-    return np.linalg.solve(A, b)
-
-def optimize_second_order():
-    kMinStepSize = 1e-8
-    kMaxSteps = 10
-
-    w0 = np.zeros(4)
-    w_path = [ w0 ]
-
-    c_prev = None
-
-    nsteps = 0
-    stepsize = 1.
-    w_cur = w0;
-    while nsteps < kMaxSteps:
-        f_cur = f(w_cur)
-        c_cur = np.dot(f_cur, f_cur)
-        Jf_cur = Jf(w_cur)
-        descent_direction = solve_normal_equations(Jf_cur, f_cur)
-
-        print 'Cost: %f' % c_cur
-        print '  Parameters: '+str(w_cur)
-        print '  Residuals: '+str(f_cur)
-        print '  Descent direction: '+str(descent_direction)
-        print '  Step size: '+str(stepsize)
-        
-        while stepsize > kMinStepSize:
-            w_next = w_cur - descent_direction * stepsize;
-            c_next = c(w_next)
-            if (c_next < c_cur):
-                w_cur = w_next
-                w_path.append(w_cur)
-                stepsize *= 1.1
-                break
-            else:
-                stepsize *= .5
-
-        nsteps += 1
-            
-    # print and return
-    plt.clf()
-    plt.xlim(-5, 10)
-    plt.ylim(-5, 5)
-    plt.plot(Y[:,0], Y[:,1], 'og')
-
-    colors = 'rgbcmyk'
-    C = colors[:len(X)]
-
-    for x,color in zip(X,C):
-        x_path = np.array([ prdot(H(w), x) for w in w_path ])
-        plt.plot(x_path[:,0], x_path[:,1], 'x-'+color)
-
-    plt.savefig('second_order_path.pdf')
-
-if __name__ == '__main__':
-    check_jacobians(np.zeros(4))
-    check_jacobians([ 1., 2., -0.5, 3.11 ])
-    #optimize_first_order()
-    optimize_second_order()
+    #decondition and return
+    return dot(linalg.inv(C2),dot(H,C1))

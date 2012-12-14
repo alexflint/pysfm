@@ -11,12 +11,11 @@ from algebra import *
 import finite_differences
 
 # Notes:
-
 #  - I use x0 and x1 to denote points in two different images. The
 #    convention throughout this code is that all fundamental matrices
 #    F, go "from" image 0 (which contains x0) "to" image 1 (which
 #    contains x1). i.e.:
-#       x1.T * F * x0 = 0
+#       x1^T * F * x0 = 0
 #
 #  - Hence the epipolar line for x0 in image 1 is F.T*x0 and the
 #    epipolar line for x1 in image 0 is F*x1
@@ -30,9 +29,9 @@ CONVERGENCE_THRESH  = 1e-5   # convergence detected when improvement less than t
 INIT_DAMPING        = .1
 
 K                   = eye(3)
-K                   = array([[  1.5 ,  0., -.4 ],
-                             [   0.,  .9,  .18 ],
-                             [   0. ,  0.,   1. ]])
+#K                   = array([[  1.5 ,  0., -.4 ],
+#                             [   0.,  .9,  .18 ],
+#                             [   0. ,  0.,   1. ]])
 
 CAUCHY_SIGMA        = .1
 CAUCHY_SIGMA_SQR    = CAUCHY_SIGMA * CAUCHY_SIGMA
@@ -107,7 +106,10 @@ def Jcauchy_sqrtcost_from_residual(r, dr):
     assert ndim(dr) == 1
     sqrtcost = cauchy_sqrtcost_from_residual(r)
     if sqrtcost < 1e-8:
-        return 0.     # this is in fact the correct thing to do here
+        return 0.     # THIS WILL COME UP OFTEN: in particular
+                      # whenever the current F agrees with a
+                      # correspondence pair
+this is in fact the correct thing to do here
     return dr * r / (sqrtcost * (CAUCHY_SIGMA_SQR + r*r))
 
 def Jcauchy_sqrtcost_from_residual_multidimensional(r, Jr):
@@ -255,6 +257,7 @@ def Jresidual(K, R, t, x0, x1):
     J = Jf/sqrt(d) - f*Jd / (d * sqrt(d))
     return J
 
+
 ################################################################################
 def residual_robust(K, R, t, x0, x1):
     return cauchy_sqrtcost_from_residual(residual(K, R, t, x0, x1))
@@ -262,6 +265,7 @@ def residual_robust(K, R, t, x0, x1):
 def Jresidual_robust(K, R, t, x0, x1):
     return Jcauchy_sqrtcost_from_residual(residual(K, R, t, x0, x1),
                                           Jresidual(K, R, t, x0, x1))
+
 
 ################################################################################
 def cost(K, R, t, xs0, xs1):
@@ -398,7 +402,7 @@ def optimize_fmatrix(xs0, xs1, R_init, t_init):
 
 
 ################################################################################
-def setup_test_problem():
+def setup_test_problem(n=NUM_CORRESPONDENCES):
     R0 = eye(3)
     t0 = zeros(3)
 
@@ -409,9 +413,9 @@ def setup_test_problem():
     R,t = relative_pose(R0,t0, R1,t1)
 
     random.seed(123)
-    pts = random.randn(NUM_CORRESPONDENCES,3) + array([0., 0., -5.])
-    xs0 = array([ pr(dot(K, dot(R0, x) + t0)) for x in pts ])
-    xs1 = array([ pr(dot(K, dot(R1, x) + t1)) for x in pts ])
+    pts  = random.randn(n,3) + array([0., 0., -5.])
+    xs0  = array([ pr(dot(K, dot(R0, x) + t0)) for x in pts ])
+    xs1  = array([ pr(dot(K, dot(R1, x) + t1)) for x in pts ])
     xs0 += random.randn(*xs0.shape) * SENSOR_NOISE
     xs1 += random.randn(*xs1.shape) * SENSOR_NOISE
 

@@ -15,6 +15,7 @@ Gs = np.array([[[ 0.,  0.,  0. ],
                 [ 1.,  0.,  0. ],
                 [ 0.,  0.,  0. ]]])
 
+################################################################################
 class SO3(object):
     # Compute the mapping from so(3) to SO(3)
     @classmethod
@@ -57,6 +58,29 @@ class SO3(object):
         for i in range(3):
             J[:,i] = SO3.generator_field(i, x)
         return J
+
+################################################################################
+def make_SL3_basis():
+    Gs = np.zeros((8,3,3))
+    Gs[0,0,2] =  1.
+    Gs[1,1,2] =  1.
+    Gs[2,0,1] =  1.
+    Gs[3,1,0] =  1.
+    Gs[4,0,0] =  1.
+    Gs[4,1,1] = -1.
+    Gs[5,1,1] = -1.
+    Gs[5,2,2] =  1.
+    Gs[6,2,0] =  1.
+    Gs[7,2,1] =  1.
+    return Gs
+
+SL3_BASIS = make_SL3_basis()
+
+def SL3_exp(w):
+    import scipy.linalg
+    assert np.shape(w) == (8,)
+    return scipy.linalg.expm(np.sum( w[i] * SL3_BASIS[i] for i in range(8) ))
+
 
 ################################################################################
 class LieTest(NumpyTestCase):
